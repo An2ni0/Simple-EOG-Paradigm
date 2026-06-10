@@ -13,24 +13,55 @@ import pyqtgraph as pg
 import json
 import os
 
+# --- 读取配置文件 config.json ---
+DEFAULT_CONFIG = {
+    "network": {
+        "daq_pc_ip": "10.10.10.100",
+        "udp_port": 55555
+    },
+    "daq_hardware": {
+        "eog_emg_dev": "cDAQ1Mod8",
+        "trigger_dev": "cDAQ1Mod1",
+        "eog_emg_chans": ["ai0", "ai2", "ai6"],
+        "trigger_chans": ["ai7", "ai16", "ai17", "ai18", "ai19", "ai20", "ai21", "ai22", "ai23"],
+        "sample_rate": 10000,
+        "display_seconds": 5
+    }
+}
+
+def load_config():
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    if not os.path.exists(config_path):
+        return DEFAULT_CONFIG
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return config
+    except Exception as e:
+        print(f"读取配置文件失败: {e}")
+        return DEFAULT_CONFIG
+
+config = load_config()
+
 # --- 配置区 ---
 UDP_IP = "0.0.0.0"
-UDP_PORT = 55555
+UDP_PORT = config.get("network", {}).get("udp_port", 55555)
 
 # --- cDAQ 模块与通道分配 ---
-EOG_EMG_DEV = "cDAQ1Mod8"   # EOG/EMG 采集卡所在槽位
-TRIGGER_DEV = "cDAQ1Mod1"   # 触发信号采集卡所在槽位 (两张独立的 NI-9205 卡)
+daq_hw = config.get("daq_hardware", {})
+EOG_EMG_DEV = daq_hw.get("eog_emg_dev", "cDAQ1Mod8")   # EOG/EMG 采集卡所在槽位
+TRIGGER_DEV = daq_hw.get("trigger_dev", "cDAQ1Mod1")   # 触发信号采集卡所在槽位 (两张独立的 NI-9205 卡)
 
-EOG_EMG_CHANS = ['ai0', 'ai2', 'ai6']
-TRIGGER_CHANS = ['ai7', 'ai16', 'ai17', 'ai18', 'ai19', 'ai20', 'ai21', 'ai22', 'ai23']
+EOG_EMG_CHANS = daq_hw.get("eog_emg_chans", ['ai0', 'ai2', 'ai6'])
+TRIGGER_CHANS = daq_hw.get("trigger_chans", ['ai7', 'ai16', 'ai17', 'ai18', 'ai19', 'ai20', 'ai21', 'ai22', 'ai23'])
 
 # 拼装成唯一的物理通道名称以分配给 Task
 EOG_EMG_PHYS_CHANS = [f"{EOG_EMG_DEV}/{ch}" for ch in EOG_EMG_CHANS]
 TRIGGER_PHYS_CHANS = [f"{TRIGGER_DEV}/{ch}" for ch in TRIGGER_CHANS]
 CHANNELS = EOG_EMG_PHYS_CHANS + TRIGGER_PHYS_CHANS
 NUM_CHANNELS = len(CHANNELS)
-SAMPLE_RATE = 10000  # 目前实际使用的是 10kHz，最高30kHz
-DISPLAY_SECONDS = 5  # 屏幕上显示最近 5 秒的波形
+SAMPLE_RATE = daq_hw.get("sample_rate", 10000)  # 目前实际使用的是 10kHz，最高30kHz
+DISPLAY_SECONDS = daq_hw.get("display_seconds", 5)  # 屏幕上显示最近 5 秒的波形
 
 class DAQMonitorApp(QtWidgets.QMainWindow):
     def __init__(self):

@@ -10,8 +10,61 @@ import ctypes
 from datetime import datetime
 
 # ========================== 1. UDP 配置与控制 ==========================
-DAQ_PC_IP = os.environ.get("DAQ_PC_IP", "10.10.10.100")
-DAQ_UDP_PORT = 55555
+import json
+
+DEFAULT_CONFIG = {
+    "network": {
+        "daq_pc_ip": "10.10.10.100",
+        "udp_port": 55555
+    },
+    "daq_hardware": {
+        "eog_emg_dev": "cDAQ1Mod8",
+        "trigger_dev": "cDAQ1Mod1",
+        "eog_emg_chans": ["ai0", "ai2", "ai6"],
+        "trigger_chans": ["ai7", "ai16", "ai17", "ai18", "ai19", "ai20", "ai21", "ai22", "ai23"],
+        "sample_rate": 10000,
+        "display_seconds": 5
+    },
+    "paradigm": {
+        "grid_size": 5,
+        "target_show_sec": 1.0,
+        "rest_time_sec": 2.0,
+        "repeat_per_cell": 2,
+        "direction_rest_sec": 3.0,
+        "manual_confirm_direction": False
+    }
+}
+
+def load_config():
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    if not os.path.exists(config_path):
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(DEFAULT_CONFIG, f, indent=4, ensure_ascii=False)
+            print(f"[Config] 默认配置文件已自动创建: {config_path}")
+        except Exception as e:
+            print(f"[Config] 创建默认配置文件失败: {e}")
+        return DEFAULT_CONFIG
+        
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        for key in DEFAULT_CONFIG:
+            if key not in config:
+                config[key] = DEFAULT_CONFIG[key]
+            else:
+                for subkey in DEFAULT_CONFIG[key]:
+                    if subkey not in config[key]:
+                        config[key][subkey] = DEFAULT_CONFIG[key][subkey]
+        return config
+    except Exception as e:
+        print(f"[Config] 读取配置文件失败，使用默认配置: {e}")
+        return DEFAULT_CONFIG
+
+config = load_config()
+
+DAQ_PC_IP = os.environ.get("DAQ_PC_IP", config["network"]["daq_pc_ip"])
+DAQ_UDP_PORT = config["network"]["udp_port"]
 udp_socket = None
 
 def init_udp():

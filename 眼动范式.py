@@ -36,12 +36,12 @@ FONT_LARGE = ("SimHei", 60, "bold")
 FONT_SMALL = ("SimHei", 32, "bold")
 
 # ========================== 实验核心参数 ==========================
-GRID = 5                  # 支持 3 / 5 等奇数网格，中心格自动跳过采集
-TARGET_SHOW = 1.0         # 目标点显示时长（秒） - 可根据志愿者反应速度调大
-REST_TIME = 2.0           # 每次试次间休息时长（秒） - 可根据志愿者反应速度调大
-REPEAT_PER_CELL = 2       # 普通点位采集次数
-DIRECTION_REST = 3.0      # 自动切换方向休息时长(秒)
-MANUAL_CONFIRM_DIRECTION = False  # 切换新方向是否需要医生按回车手动确认（适于反应迟钝/老年患者）
+GRID = common.config["paradigm"]["grid_size"]                  # 支持 3 / 5 等奇数网格，中心格自动跳过采集
+TARGET_SHOW = common.config["paradigm"]["target_show_sec"]         # 目标点显示时长（秒） - 可根据志愿者反应速度调大
+REST_TIME = common.config["paradigm"]["rest_time_sec"]           # 每次试次间休息时长（秒） - 可根据志愿者反应速度调大
+REPEAT_PER_CELL = common.config["paradigm"]["repeat_per_cell"]       # 普通点位采集次数
+DIRECTION_REST = common.config["paradigm"]["direction_rest_sec"]      # 自动切换方向休息时长(秒)
+MANUAL_CONFIRM_DIRECTION = common.config["paradigm"]["manual_confirm_direction"]  # 切换新方向是否需要医生按回车手动确认（适于反应迟钝/老年患者）
 
 # 计算所有目标点的中心坐标
 cell_w = screen_width // GRID    # 单个格子宽度
