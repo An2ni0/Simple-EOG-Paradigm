@@ -5,23 +5,17 @@
     },
     "daq_hardware": {
         "eog_emg_dev": "cDAQ1Mod8",
-        "trigger_dev": "cDAQ1Mod1",
         "eog_emg_chans": [
             "ai0",
             "ai2",
             "ai6"
         ],
-        "trigger_chans": [
-            "ai7",
-            "ai16",
-            "ai17",
-            "ai18",
-            "ai19",
-            "ai20",
-            "ai21",
-            "ai22",
-            "ai23"
-        ],
+        "__comment_channel_mappings__": "横向电极默认ai0(hEOG)，右眼纵向电极默认ai2(vEOG_right)，左眼纵向电极默认ai6(vEOG_left)",
+        "channel_mappings": {
+            "hEOG": "ai0",
+            "vEOG_right": "ai2",
+            "vEOG_left": "ai6"
+        },
         "sample_rate": 10000,
         "display_seconds": 5
     },

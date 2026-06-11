@@ -130,10 +130,27 @@ for f_idx = 1:num_files
     M = permute(M, [1, 3, 2]); 
     final_data = reshape(M, [], C); % 维度: [TotalSamples, Channels]
     
-    % 3.4 提取 hEOG (ai0) 和 vEOG (ai2)
-    % 对应通道索引 (根据 config 中的顺序，前两个通道分别为 ai0 和 ai2)
-    hEOG_raw = final_data(:, 1);
-    vEOG_raw = final_data(:, 2);
+    % 3.4 提取 hEOG 和 vEOG
+    h_chan = 'ai0';
+    v_chan = 'ai2';
+    if isfield(meta, 'channel_mappings')
+        if isfield(meta.channel_mappings, 'hEOG')
+            h_chan = meta.channel_mappings.hEOG;
+        end
+        if isfield(meta.channel_mappings, 'vEOG_right')
+            v_chan = meta.channel_mappings.vEOG_right;
+        end
+    end
+    
+    h_idx = find(contains(meta.channels, ['/' h_chan]));
+    v_idx = find(contains(meta.channels, ['/' v_chan]));
+    
+    if isempty(h_idx) || isempty(v_idx)
+        error('未能在通道列表中找到 hEOG (/%s) 或 vEOG (/%s)。', h_chan, v_chan);
+    end
+    
+    hEOG_raw = final_data(:, h_idx);
+    vEOG_raw = final_data(:, v_idx);
     
     % 3.5 降采样与零相位滤波
     downsample_factor = current_fs_orig / fs_new;

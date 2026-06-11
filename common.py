@@ -19,9 +19,13 @@ DEFAULT_CONFIG = {
     },
     "daq_hardware": {
         "eog_emg_dev": "cDAQ1Mod8",
-        "trigger_dev": "cDAQ1Mod1",
         "eog_emg_chans": ["ai0", "ai2", "ai6"],
-        "trigger_chans": ["ai7", "ai16", "ai17", "ai18", "ai19", "ai20", "ai21", "ai22", "ai23"],
+        "__comment_channel_mappings__": "横向电极默认ai0(hEOG)，右眼纵向电极默认ai2(vEOG_right)，左眼纵向电极默认ai6(vEOG_left)",
+        "channel_mappings": {
+            "hEOG": "ai0",
+            "vEOG_right": "ai2",
+            "vEOG_left": "ai6"
+        },
         "sample_rate": 10000,
         "display_seconds": 5
     },
@@ -140,12 +144,19 @@ def log_event(trial_idx, grid_row, grid_col, px, py, event_type, desc=""):
 def elevate_process_priority():
     """提升当前进程至 HIGH_PRIORITY_CLASS，减少 Windows 调度引起的计时抖动"""
     try:
+        kernel32 = ctypes.windll.kernel32
+        # 在 64 位系统上，HANDLE 是 64 位的。必须显式声明 restype，否则会发生 32 位截断导致句柄无效(ERROR_INVALID_HANDLE)
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel32.SetPriorityClass.restype = ctypes.c_int
+        
         # 0x00000080 代表 HIGH_PRIORITY_CLASS (高优先级进程)
-        success = ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x00000080)
+        success = kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x00000080)
         if success:
             print("[System] 进程优先级已提升至 HIGH_PRIORITY_CLASS")
         else:
-            print("[System] 进程优先级提升失败（返回值为空）")
+            err = kernel32.GetLastError()
+            print(f"[System] 进程优先级提升失败，错误码: {err}")
     except Exception as e:
         print(f"[System] 进程优先级提升异常: {e}")
 
