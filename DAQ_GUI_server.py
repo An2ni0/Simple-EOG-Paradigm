@@ -205,7 +205,7 @@ class DAQMonitorApp(QtWidgets.QMainWindow):
                 for ch_name in EOG_EMG_PHYS_CHANS:
                     task.ai_channels.add_ai_voltage_chan(
                         ch_name,
-                        terminal_config=TerminalConfiguration.DIFFERENTIAL,
+                        terminal_config=TerminalConfiguration.DIFF,
                         min_val=-0.2, max_val=0.2
                     )
                 task.timing.cfg_samp_clk_timing(SAMPLE_RATE, sample_mode=AcquisitionType.CONTINUOUS)
