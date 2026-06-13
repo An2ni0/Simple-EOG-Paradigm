@@ -1,3 +1,190 @@
+# EOG Grid Acquisition System User Manual & Doctor Operation SOP (JSON Config Version)
+
+[English Version](#english-version) | [中文版](#chinese-version)
+
+---
+
+## <a id="english-version"></a> English Version
+
+This system is a simplified dual-machine system designed specifically for the **synchronous acquisition of Electrooculography (EOG) and eye gaze fixation points**. This version implements **complete decoupling of hardware/software parameters and code**. All adjustable options, such as network IPs, ports, hardware card numbers, channel assignments, and experiment timing, are uniformly stored in the `config.json` configuration file, making it convenient for collaborators to quickly debug and deploy in different laboratory environments.
+
+---
+
+## I. Hardware & Software Decoupling and Unified Configuration (config.json)
+
+The [config.json](file:///%5BIP_ADDRESS%5D/config.json) in the project root directory is the only configuration file for the system. Open it to adjust all the following parameters:
+
+```json
+{
+    "network": {
+        "daq_pc_ip": "[IP_ADDRESS]",          // Static LAN IP of the receiver (cDAQ PC)
+        "udp_port": 55555                     // UDP network communication port
+    },
+    "daq_hardware": {
+        "eog_emg_dev": "cDAQ1Mod8",           // Slot name where the analog EOG/EMG card is located
+        "eog_emg_chans": ["ai0", "ai2", "ai6"], // Enabled analog input channels
+        "__comment_channel_mappings__": "Horizontal electrode default ai0(hEOG), Right eye vertical electrode default ai2(vEOG_right), Left eye vertical electrode default ai6(vEOG_left)",
+        "channel_mappings": {                 // Mapping between physiological signals and DAQ channels
+            "hEOG": "ai0",                    // Horizontal EOG signal
+            "vEOG_right": "ai2",              // Right eye vertical EOG signal
+            "vEOG_left": "ai6"                // Left eye vertical EOG signal
+        },
+        "sample_rate": 10000,                 // NI card hardware sampling rate (Default 10kHz)
+        "display_seconds": 5                  // Time span of waveforms displayed on the cDAQ monitor GUI (seconds)
+    },
+    "paradigm": {
+        "grid_size": 5,                       // Experimental stimulus grid size (5x5 odd grid)
+        "target_show_sec": 1.0,               // Duration the red target dot is lit (seconds)
+        "rest_time_sec": 2.0,                 // Duration the center cross (rest) is displayed between trial switches (seconds)
+        "repeat_per_cell": 2,                 // Number of repeated acquisitions per grid point
+        "direction_rest_sec": 3.0,            // Auto-rest time when switching to the next point direction (seconds)
+        "manual_confirm_direction": false     // Whether to enable manual confirmation mode for direction switching (manual progress control)
+    }
+}
+```
+
+> **💡 Note**: If `config.json` is not detected upon system startup, it will automatically create a file with the default parameters above in the root directory. After modifying this file, no recompilation is needed; just restart the program for the changes to take effect.
+
+---
+
+## II. Hardware DIFF Wiring and COM Reference Pin Description
+
+To ensure high-precision bioelectric signal acquisition and eliminate common-mode noise, the system adopts **DIFF (Differential Input)** mode:
+* **Channel Differential Wiring Pairing**:
+  * Horizontal EOG channel mapped to `ai0`: Physical positive connected to `ai0`, physical negative connected to `ai8`.
+  * Right eye vertical electrode channel mapped to `ai2`: Physical positive connected to `ai2`, physical negative connected to `ai10`.
+  * Left eye vertical electrode channel mapped to `ai6`: Physical positive connected to `ai6`, physical negative connected to `ai14`.
+* **Reference Electrode (REF)**: The reference electrode (such as the mastoid reference point behind the ear) should be physically connected to the **`COM`** ground input port of the NI-9205 card.
+
+---
+
+## III. Doctor and Student Experiment Operation SOP (Standard Operating Procedure)
+
+Please strictly follow the steps below to conduct the experiment. Do not reverse the order:
+
+### Step 1: Start cDAQ Acquisition Software (Operate on cDAQ PC)
+1. Ensure the NI acquisition box is powered on and the USB is connected.
+2. Double-click to run or run in the command line:
+    ```bash
+    python DAQ_GUI_server.py
+    ```
+3. **Check Preview**: Confirm the window is open, the status bar shows **"🟢 Preview Mode (Waiting for CMD_START Command)"**, and the borders are green. The real-time waveform refresh indicates normal operation.
+
+### Step 2: Start Paradigm Main Program (Operate on Paradigm Control PC)
+1. **Modify Configuration (If network or time changes)**: Open `config.json` in the root directory and ensure `daq_pc_ip` is filled with the actual wired network card IP address of the cDAQ PC just checked.
+2. Run on the paradigm PC:
+    ```bash
+    python 眼动范式.py
+    ```
+3. **Information Entry**: An input box will pop up in the center of the screen, prompting **"Please enter patient name/ID"**.
+4. Enter the patient identifier (e.g., `002_JohnDoe`) and click "OK" to confirm.
+
+### Step 3: Device Linkage Verification
+1. After input confirmation, the paradigm PC enters a full-screen black-background grid interface and displays **"Press ENTER to start the experiment"**.
+2. **Check Linkage Status**: At this point, the paradigm computer automatically sends a start signal. **Please turn your head to check the cDAQ PC screen**:
+    * The cDAQ GUI status bar MUST change to **"🔴 RECORDING"**, the window borders turn **red**, and the timer starts running.
+    * *Troubleshooting*: If it does not turn red, it means the network is disconnected, the IP is misconfigured, or the firewall is blocking it. Please press `ESC` to exit, troubleshoot the configuration, and then restart!
+
+### Step 4: Execute Experiment
+1. Instruct the volunteer to get ready and stare at the screen.
+2. Press the **"ENTER"** key on the paradigm PC.
+3. **Volunteer Task**:
+    * When a **red dot** appears on the screen, please stare closely at the red dot.
+    * When the red dot disappears and a **white cross** appears in the center of the screen, quickly move your eyes back to stare at the center cross.
+4. The experiment will automatically traverse the 25 positions of the grid in sequence (automatically skipping the very center grid point).
+
+### Step 5: Experiment End and Safe Storage
+1. After the point traversal is complete, the paradigm PC will play the voice "Experiment Completed" and safely exit full screen.
+2. The cDAQ PC receives the automatically sent stop command, the interface reverts to **"🟢 Green Preview State"**, and raw binary data files `.bin` and session description files `_meta.json` are generated in the `EOG/` directory.
+3. The paradigm PC will generate a local behavioral CSV log in the `logs/` directory.
+
+---
+
+## IV. Keyboard Shortcut Controls During the Experiment
+
+On the paradigm PC, operators can control the experiment progress at any time via the keyboard:
+* `SPACE bar`: **Pause** the experiment (the screen prompts "Paused"). Press the `ENTER` key again to resume the experiment at the current position.
+* `ESC key`: **Force abort** the experiment. The program will immediately send a stop signal to cDAQ and exit safely. **The acquired data segments will still be safely saved to disk**.
+* `ENTER key`: Used to **resume the experiment** in the paused state, and to switch directions in the manual confirmation mode.
+
+---
+
+## V. Parameter Adjustment Guide for Slow-Reacting/Elderly Volunteers
+
+If you encounter patients with slow reactions, difficult eye movements, or who get tired easily, please directly modify the `paradigm` configuration in `config.json`:
+
+1. **Insufficient Red Dot Fixation Time**:
+    Extend `"target_show_sec"` to `1.5` or `2.0` (seconds) to give patients enough time (> 1 second) to maintain stable fixation after moving their gaze.
+2. **Fatigue When Switching Points / Unstable Baseline**:
+    Extend `"rest_time_sec"` to `2.5` or `3.0` (seconds) to give patients ample time to move their eyes back to the center and stabilize, ensuring a thoroughly stable baseline.
+3. **Patient is Extremely Prone to Fatigue and Cannot Cooperate with Automatic Continuous Switching**:
+    Change `"manual_confirm_direction"` to `true`.
+    * **Effect**: Before the system prepares to switch to each new point direction on the grid, the screen will display "Prepare for the next direction" and play a voice prompt. **At this point, the experiment hangs indefinitely waiting**.
+    * The doctor can verbally instruct the patient to close their eyes and rest. After the patient is ready, **the doctor presses the ENTER key**, and the paradigm will begin presenting the red dots for that direction. This greatly provides breathing room and adjustment time.
+
+---
+
+## VI. Independent Dual-Machine Synchronization Latency Analysis Tool (analyze_sync_latency.py)
+
+To conveniently evaluate the dual-machine UDP transmission latency and jitter under different network speeds and computer states, the system provides an independent analysis script [analyze_sync_latency.py](file:///c:/Users/simia/OneDrive/Data/DoCs/Tools/Simple_EOG_Paradigm/analyze_sync_latency.py):
+
+### 1. Real-Time Network Latency and Clock Offset Measurement (Ping-Pong)
+Uses the NTP algorithm to detect real-time one-way network latency, RTT jitter, and system clock offset between the two computers.
+* **Server (Execute on DAQ PC)**:
+  ```bash
+  python analyze_sync_latency.py server
+  ```
+* **Client (Execute on Paradigm PC)**:
+  ```bash
+  python analyze_sync_latency.py client --ip 10.10.10.100
+  ```
+  *(Note: If the ip parameter is not specified, the program reads daq_pc_ip from config.json by default)*
+* **Output Metrics**:
+  * RTT Jitter (StdDev): If < 5ms, the LAN connection is very stable.
+  * System Clock Offset: Indicates the millisecond-level time difference between the DAQ PC and Paradigm PC system clocks.
+
+### 2. Offline Log Timestamp Comparison (Analyze)
+Matches the behavioral CSV log generated locally after the experiment ends with the event marker sequence in the `_meta.json` saved by DAQ.
+* **Run Analysis**:
+  ```bash
+  python analyze_sync_latency.py analyze logs/subject_眼动_20260611_120000.csv EOG/DAQ_Data_20260611_120000_meta.json -v
+  ```
+* **Output Metrics**:
+  * **Mean Offset**: The average alignment time difference caused by the inconsistent clocks of the two PCs during this experiment. In subsequent analysis, subtracting this Offset from the EOG signal timestamp or event marker can perfectly align them.
+  * **Jitter (StdDev)**: Real-time jitter of network transmission and thread scheduling. If Jitter < 10ms, it means no hardware alignment is needed; pure UDP linkage is sufficient.
+  * **Clock Drift**: Evaluates the clock stretching/shrinking caused by slight deviations in the physical crystal oscillator frequencies of the two computers during the experiment.
+
+---
+
+## VII. Subsequent Modeling and Data Analysis Alignment Guide (For Analysts)
+
+This system uses a minimalist UDP alignment scheme without needing to parse voltage levels:
+
+1. **Read Metadata**:
+    Open the `_meta.json` in the `EOG/` folder to read the marker points broadcasted by the paradigm PC in the `events` list. For example:
+    ```json
+    {
+        "event": "T_1_R0C1_TARGET_START",
+        "system_time": 17839304.51,
+        "daq_sample_index": 25000
+    }
+    ```
+    This indicates that when the cDAQ acquired the `25000`th data point, the red dot at the grid `(Row 0, Col 1)` position lit up.
+
+2. **Baseline Correction**:
+    Because EOG is prone to baseline drift over time, when extracting the voltage of looking at the red dot:
+    * Extract the average voltage of hEOG and vEOG during `REST_START` to `REST_END` (staring at the center cross) as the baseline $V_{base\_h}, V_{base\_v}$;
+    * Extract the voltage $V_h, V_v$ during `TARGET_START` to `TARGET_END` (staring at the target red dot);
+    * Use relative difference for modeling: $\Delta V_h = V_h - V_{base\_h}$, $\Delta V_v = V_v - V_{base\_v}$.
+
+3. **Data Slicing to Counteract Reaction Latency Limit**:
+    * Because subjects typically need a `150ms ~ 300ms` reaction time (saccade period) after the red dot lights up for their eyeballs to actually move there.
+    * **Suggested Analysis Window**: Extract the data slice from **350ms after** `TARGET_START` to `TARGET_END` as a stable period for averaging, to eliminate the interference of Reaction Time on gaze space modeling.
+
+---
+
+## <a id="chinese-version"></a> 中文版
+
 # EOG 眼电网格采集系统用户手册 & 医生操作 SOP (JSON 配置版)
 
 本系统是专为 **眼电 (EOG) 与眼球注视点同步采集** 设计的简化版双机系统。本版本实现了**软硬件参数与代码的完全解耦**，所有的网络 IP、端口、硬件卡号、通道分配、以及实验时间等可调选项均统一存放在 `config.json` 配置文件中，方便合作者在不同的实验室环境下快速调试与复部署。
@@ -6,12 +193,12 @@
 
 ## 一、 软硬件解耦与统一配置文件 (config.json)
 
-项目根目录下的 [config.json](file:///c:/Users/simia/OneDrive/Data/DoCs/Tools/Simple_EOG_Paradigm/config.json) 是系统唯一的配置文件。打开它即可调整以下所有参数：
+项目根目录下的 [config.json](file:///%5BIP_ADDRESS%5D/config.json) 是系统唯一的配置文件。打开它即可调整以下所有参数：
 
 ```json
 {
     "network": {
-        "daq_pc_ip": "10.10.10.100",          // 接收端 (cDAQ PC) 的静态局域网 IP
+        "daq_pc_ip": "[IP_ADDRESS]",          // 接收端 (cDAQ PC) 的静态局域网 IP
         "udp_port": 55555                     // UDP 网络通信端口
     },
     "daq_hardware": {
