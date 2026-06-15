@@ -73,9 +73,14 @@ Please strictly follow the steps below to conduct the experiment. Do not reverse
 ### Step 2: Start Paradigm Main Program (Operate on Paradigm Control PC)
 1. **Modify Configuration (If network or time changes)**: Open `config.json` in the root directory and ensure `daq_pc_ip` is filled with the actual wired network card IP address of the cDAQ PC just checked.
 2. Run on the paradigm PC:
-    ```bash
-    python 眼动范式.py
-    ```
+    - For full grid stimulation:
+      ```bash
+      python 眼动范式.py
+      ```
+    - For cross-direction stimulus acquisition (SOP standard recommended):
+      ```bash
+      python 眼动范式2.py
+      ```
 3. **Information Entry**: An input box will pop up in the center of the screen, prompting **"Please enter patient name/ID"**.
 4. Enter the patient identifier (e.g., `002_JohnDoe`) and click "OK" to confirm.
 
@@ -254,9 +259,14 @@ This system uses a minimalist UDP alignment scheme without needing to parse volt
 ### 步骤 2：启动范式主程序（在范式控制 PC 上操作）
 1.  **修改配置（若有网络或时间变更）**：打开根目录下的 `config.json`，确保 `daq_pc_ip` 填入了刚才 cDAQ PC 的真实有线网卡 IP 地址。
 2.  在范式电脑上运行：
-    ```bash
-    python 眼动范式.py
-    ```
+    - 全网格刺激采集：
+      ```bash
+      python 眼动范式.py
+      ```
+    - 十字方向眼动采集（SOP标准推荐）：
+      ```bash
+      python 眼动范式2.py
+      ```
 3.  **信息录入**：屏幕中央会弹出输入框，提示 **“请输入患者姓名/编号”**。
 4.  输入患者标识（如 `002_李四`），点击“确定”确认。
 
@@ -366,7 +376,7 @@ This system uses a minimalist UDP alignment scheme without needing to parse volt
 
 ## VIII. Neuracle TriggerBox Hardware Real-time Synchronization
 
-The system supports real-time trigger synchronization with the Neuracle EEG machine using its local library at `neuracle_lib.triggerBox` over serial:
+The system uses Neuracle TriggerBox serial API as the standard method for both EOG/EEG and DAQ synchronization. This applies to both the full grid paradigm ([眼动范式.py](file:///d:/OneDrive/Data/DoCs/Tools/Simple_EOG_Paradigm/眼动范式.py)) and the cross-direction paradigm ([眼动范式2.py](file:///d:/OneDrive/Data/DoCs/Tools/Simple_EOG_Paradigm/眼动范式2.py) - 十字方向眼动采集).
 - **Neuracle Serial Connection**: Handled by the `TriggerIn` class inside `neuracle_lib/triggerBox.py`. It opens the specified COM port (e.g., `COM3`, configured in `config.json` under `"triggerbox"`) and validates the connection by sending a custom status package.
 - **Trigger Mapping**: Numeric event markers are sent directly using `.output_event_data(trigger_val)` (values 1–255).
 - The mapping is stored in `trigger_mappings.json`. Each grid position cell `c = row * 5 + col` (ranges 0-24) maps to a base value: `base = 10 + 8 * c`.
@@ -375,7 +385,7 @@ The system supports real-time trigger synchronization with the Neuracle EEG mach
 
 ## 八、 Neuracle TriggerBox 脑电实时同步打标硬件接线与配置
 
-系统支持通过调用本地 `neuracle_lib.triggerBox` 库与 Neuracle 脑电设备进行实时串口硬件打标同步：
+项目以 Neuracle TriggerBox 串口打标控制为标准脑电与 DAQ 采集同步方案。全网格采集 ([眼动范式.py](file:///d:/OneDrive/Data/DoCs/Tools/Simple_EOG_Paradigm/眼动范式.py)) 与 十字方向眼动采集 ([眼动范式2.py](file:///d:/OneDrive/Data/DoCs/Tools/Simple_EOG_Paradigm/眼动范式2.py)) 均采用该 API 实现同步：
 - **Neuracle 串口打标**：由 `neuracle_lib/triggerBox.py` 中的 `TriggerIn` 类实现。通过 `config.json` 中的 `"triggerbox"` 配置段指定 COM 端口（默认 COM3）。建立连接后，系统使用 `.output_event_data(trigger_val)` 来进行打标控制。
 - 具体的数字 Trigger 映射均保存在 `trigger_mappings.json`。每个网格格点 `c = row * 5 + col`（0-24）对应的事件基准码计算公式为 `base = 10 + 8 * c`：
   - 试次开始（TARGET_START / BLINK_BEFORE）：`base + 2 + 2 * (trial_idx - 1)`

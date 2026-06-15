@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+"""
+眼电EOG采集范式 - 十字方向眼动采集 (基于 Neuracle TriggerBox 硬件打标控制)
+"""
 import time
 import pyttsx3
 import winsound
