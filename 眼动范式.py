@@ -15,11 +15,9 @@ import common
 root = tk.Tk()
 root.title("眼电EOG采集范式 - 网格范式")
 
-# 弹窗输入患者信息（在进入全屏前执行，避免全屏下弹窗焦点丢失）
+# 弹窗输入患者信息与连接配置（在进入全屏前执行，避免全屏下弹窗焦点丢失）
 root.withdraw()  # 暂时隐藏主窗口
-patient_name = simpledialog.askstring("录入信息", "请输入患者姓名/编号:", parent=root)
-if not patient_name:
-    patient_name = "subject"
+patient_name = common.launch_setup_gui("网格范式")
 root.deiconify()  # 恢复主窗口
 
 root.attributes("-fullscreen", True)  # 设置全屏
@@ -174,6 +172,10 @@ def key_control(e):
         except:
             pass
         try:
+            common.close_hardware_trigger()
+        except:
+            pass
+        try:
             root.destroy()
         except:
             pass
@@ -211,10 +213,11 @@ time.sleep(1)
 set_text("按回车键开始实验\nESC退出  空格暂停")
 wait_start()
 
-# 提权进程，初始化网络与本地日志
+# 提权进程，初始化网络与本地日志并开启脑电打标
 common.elevate_process_priority()
 common.init_udp()
 common.init_log(patient_name, "眼动网格")
+common.init_hardware_trigger()
 common.start_daq("眼动网格")
 
 # ========================== 9. 主实验循环 ==========================
@@ -298,8 +301,9 @@ if check_window_exists():
     common.precise_wait(1.0, root, lambda: paused, lambda: running)
 
 # ========================== 10. 实验结束 ==========================
-# 停止远端 cDAQ 采集
+# 停止远端 cDAQ 采集并关闭硬件连接
 common.stop_daq()
+common.close_hardware_trigger()
 
 if check_window_exists():
     set_text("✅ 实验全部完成！", font=FONT_LARGE)

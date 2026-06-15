@@ -12,12 +12,19 @@ This system is a simplified dual-machine system designed specifically for the **
 
 ## I. Hardware & Software Decoupling and Unified Configuration (config.json)
 
-The [config.json](file:///%5BIP_ADDRESS%5D/config.json) in the project root directory is the only configuration file for the system. Open it to adjust all the following parameters:
+The [config.json](file:///config.json) in the project root directory is the only configuration file for the system. Open it to adjust all the following parameters:
 
 ```json
 {
+    "device_mode": "dry_run",                 // Connection mode: dry_run, neuracle, jellyfish, shanghai
+    "serial_port": "COM3",                    // Serial port for TriggerBox (COM3, COM4, etc.)
+    "api_dir": "",                            // Vendor API path (e.g. D:\\api\\API.py源码)
+    "patient_id": "subject",                  // Patient/subject ID prefill
+    "patient_name": "subject",                // Patient/subject name prefill
+    "operator": "",                           // Operator name prefill
+    "session_note": "",                       // Session note prefill
     "network": {
-        "daq_pc_ip": "[IP_ADDRESS]",          // Static LAN IP of the receiver (cDAQ PC)
+        "daq_pc_ip": "10.10.10.100",          // Static LAN IP of the receiver (cDAQ PC)
         "udp_port": 55555                     // UDP network communication port
     },
     "daq_hardware": {
@@ -193,12 +200,19 @@ This system uses a minimalist UDP alignment scheme without needing to parse volt
 
 ## 一、 软硬件解耦与统一配置文件 (config.json)
 
-项目根目录下的 [config.json](file:///%5BIP_ADDRESS%5D/config.json) 是系统唯一的配置文件。打开它即可调整以下所有参数：
+项目根目录下的 [config.json](file:///config.json) 是系统唯一的配置文件。打开它即可调整以下所有参数：
 
 ```json
 {
+    "device_mode": "dry_run",                 // 同步连接模式: dry_run, neuracle, jellyfish, shanghai
+    "serial_port": "COM3",                    // 脑电同步器串口号 (COM3, COM4 等)
+    "api_dir": "",                            // Neuracle 厂商 API 源码路径
+    "patient_id": "subject",                  // 患者/被试编号默认预填
+    "patient_name": "subject",                // 被试姓名默认预填
+    "operator": "",                           // 实验员名称默认预填
+    "session_note": "",                       // 实验备注默认预填
     "network": {
-        "daq_pc_ip": "[IP_ADDRESS]",          // 接收端 (cDAQ PC) 的静态局域网 IP
+        "daq_pc_ip": "10.10.10.100",          // 接收端 (cDAQ PC) 的静态局域网 IP
         "udp_port": 55555                     // UDP 网络通信端口
     },
     "daq_hardware": {
@@ -214,7 +228,7 @@ This system uses a minimalist UDP alignment scheme without needing to parse volt
         "display_seconds": 5                  // cDAQ 监控端界面上显示的波形时间跨度 (秒)
     },
     "paradigm": {
-        "grid_size": 5,                       // 实验刺激网格大小 (5x5 奇数网格)
+        "grid_size": 5,                       // 实验刺激网格大小 (5x5 差分网格)
         "target_show_sec": 1.0,               // 红色目标圆点点亮的时长 (秒)
         "rest_time_sec": 2.0,                 // 每次试次切换间显示中心十字(休息)的时长 (秒)
         "repeat_per_cell": 2,                 // 每个网格点位的重复采集次数
@@ -361,5 +375,31 @@ This system uses a minimalist UDP alignment scheme without needing to parse volt
 3.  **数据切片抗反应延迟限制**：
     *   由于受试者在红点亮起后，通常需要 `150ms ~ 300ms` 的反应时间（扫视期）眼球才真正动过去。
     *   **建议分析窗**：提取 `TARGET_START` **后延 350ms** 至 `TARGET_END` 的数据切片作为稳定期进行平均，以剔除反应时（Reaction Time）对注视空间建模的干扰。
+
+---
+
+## VIII. Hardware Real-time Synchronization (EEG Machine TriggerBox)
+
+The system supports four modes for real-time trigger synchronization with the EEG machine:
+- **Neuracle Serial**: Communicates with the Neuracle TriggerIn device via a serial port using `neuracle_lib`.
+- **Jellyfish Serial**: Writes single-byte triggers directly to the Jellyfish TriggerBox over standard serial connection (default 115200 bps).
+- **Shanghai UDP**: Broadcasts integer trigger values over the network.
+- **Dry-run**: Only logs events to local CSV, useful for debugging.
+
+The decodes mappings are stored in `trigger_mappings.json`. Each grid position cell `c = row * 5 + col` (ranges 0-24) maps to a base value: `base = 10 + 8 * c`.
+- Trial start (`TARGET_START`/`BLINK_BEFORE`): `base + 2 + 2 * (trial_idx - 1)`
+- Trial end (`TARGET_END`/`BLINK_AFTER`): `base + 2 + 2 * (trial_idx - 1) + 1`
+
+## 八、 脑电实时同步打标硬件接线与配置
+
+系统包含四种同步打标模式：
+- **Neuracle 串口模式**：通过调用厂商提供的 `neuracle_lib.triggerBox` 库向 TriggerIn 串口发送打标。
+- **Jellyfish 串口模式**：使用标准 pyserial 串口类向 Jellyfish 硬件打标盒写 1 个字节的数据（默认波特率 115200）。
+- **Shanghai UDP 模式**：通过局域网向 DAQ_GUI_server 发送 UDP 字符串打标。
+- **Dry-run 模式**：调试模式，不连物理硬件仅记录本地日志。
+
+具体的数字 Trigger 映射均保存在 `trigger_mappings.json`。每个网格格点 `c = row * 5 + col`（0-24）对应的事件基准码计算公式为 `base = 10 + 8 * c`：
+- 试次开始（TARGET_START / BLINK_BEFORE）：`base + 2 + 2 * (trial_idx - 1)`
+- 试次结束（TARGET_END / BLINK_AFTER）：`base + 2 + 2 * (trial_idx - 1) + 1`
 
 

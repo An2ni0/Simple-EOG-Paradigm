@@ -1,4 +1,11 @@
 {
+    "device_mode": "dry_run",
+    "serial_port": "COM3",
+    "api_dir": "",
+    "patient_id": "subject",
+    "patient_name": "subject",
+    "operator": "",
+    "session_note": "",
     "network": {
         "daq_pc_ip": "10.10.10.100",
         "udp_port": 55555

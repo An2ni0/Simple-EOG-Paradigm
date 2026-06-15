@@ -1,18 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-EOG 采集系统公共辅助模块 - 简化版 (UDP同步 & 行为日志)
+EOG 采集系统公共辅助模块 - 增强版 (UDP同步 & 硬件实时打标 & 引导配置GUI)
 """
 import os
 import sys
 import time
 import socket
 import ctypes
+import json
 from datetime import datetime
 
-# ========================== 1. UDP 配置与控制 ==========================
-import json
+# 导入硬件相关的自定义模块
+import acquisition_device
+import setup_gui
 
+# ========================== 1. 默认配置 ==========================
 DEFAULT_CONFIG = {
+    "device_mode": "dry_run",
+    "serial_port": "COM3",
+    "api_dir": "",
+    "patient_id": "subject",
+    "patient_name": "subject",
+    "operator": "",
+    "session_note": "",
     "network": {
         "daq_pc_ip": "10.10.10.100",
         "udp_port": 55555
@@ -57,9 +67,10 @@ def load_config():
             if key not in config:
                 config[key] = DEFAULT_CONFIG[key]
             else:
-                for subkey in DEFAULT_CONFIG[key]:
-                    if subkey not in config[key]:
-                        config[key][subkey] = DEFAULT_CONFIG[key][subkey]
+                if isinstance(DEFAULT_CONFIG[key], dict) and isinstance(config[key], dict):
+                    for subkey in DEFAULT_CONFIG[key]:
+                        if subkey not in config[key]:
+                            config[key][subkey] = DEFAULT_CONFIG[key][subkey]
         return config
     except Exception as e:
         print(f"[Config] 读取配置文件失败，使用默认配置: {e}")
@@ -67,18 +78,29 @@ def load_config():
 
 config = load_config()
 
+# ========================== 2. UDP 远程控制 ==========================
 DAQ_PC_IP = os.environ.get("DAQ_PC_IP", config["network"]["daq_pc_ip"])
 DAQ_UDP_PORT = config["network"]["udp_port"]
 udp_socket = None
 
 def init_udp():
-    global udp_socket
-    if udp_socket is None:
+    global udp_socket, DAQ_PC_IP, DAQ_UDP_PORT
+    # 动态刷新参数
+    DAQ_PC_IP = os.environ.get("DAQ_PC_IP", config["network"]["daq_pc_ip"])
+    DAQ_UDP_PORT = config["network"]["udp_port"]
+    
+    if udp_socket is not None:
         try:
-            udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            print(f"[UDP] Socket 初始化成功，目标: {DAQ_PC_IP}:{DAQ_UDP_PORT}")
-        except Exception as e:
-            print(f"[UDP] Socket 初始化失败: {e}")
+            udp_socket.close()
+        except:
+            pass
+        udp_socket = None
+        
+    try:
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        print(f"[UDP] Socket 初始化成功，目标: {DAQ_PC_IP}:{DAQ_UDP_PORT}")
+    except Exception as e:
+        print(f"[UDP] Socket 初始化失败: {e}")
 
 def send_udp(msg):
     global udp_socket
@@ -90,15 +112,104 @@ def send_udp(msg):
         except Exception as e:
             pass # UDP 开火即忘，防阻塞
 
+# ========================== 3. 硬件实时打标器同步 ==========================
+trigger_device_instance = None
+TRIGGER_MAPPING = {}
+active_task_name = "眼动网格"
+
+def init_hardware_trigger():
+    global trigger_device_instance, TRIGGER_MAPPING
+    # 1. 尝试加载 trigger_mappings.json 对照表
+    try:
+        mappings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trigger_mappings.json")
+        if os.path.exists(mappings_path):
+            with open(mappings_path, "r", encoding="utf-8") as f:
+                full_mappings = json.load(f)
+                TRIGGER_MAPPING = full_mappings.get("眼动网格", {})
+                print(f"[Trigger] 成功加载打标对照表，包含 {len(TRIGGER_MAPPING)} 个映射词条。")
+        else:
+            print("[Trigger] 未找到 trigger_mappings.json，将使用动态计算的打标编码。")
+            TRIGGER_MAPPING = {}
+    except Exception as e:
+        print(f"[Trigger] 加载 trigger_mappings.json 异常: {e}")
+        TRIGGER_MAPPING = {}
+
+    # 2. 创建并联通硬件打标模块
+    cfg = acquisition_device.DeviceConfig(
+        mode=config.get("device_mode", "dry_run"),
+        serial_port=config.get("serial_port", "COM3"),
+        api_dir=config.get("api_dir", ""),
+        shanghai_ip=config["network"]["daq_pc_ip"],
+        shanghai_port=config["network"]["udp_port"],
+        enabled=True
+    )
+    trigger_device_instance = acquisition_device.create_device(cfg)
+    if trigger_device_instance.connect():
+        print(f"[Trigger] 脑电机同步设备连接成功，当前模式: {cfg.mode}，状态: {trigger_device_instance.last_status}")
+    else:
+        print(f"[Trigger] 脑电机同步设备连接失败: {trigger_device_instance.last_error or trigger_device_instance.last_status}")
+
+def close_hardware_trigger():
+    global trigger_device_instance
+    if trigger_device_instance is not None:
+        try:
+            trigger_device_instance.close()
+            print("[Trigger] 脑电机同步设备串口/Socket已安全关闭")
+        except Exception as e:
+            print(f"[Trigger] 关闭脑电机同步设备连接异常: {e}")
+        trigger_device_instance = None
+
 def start_daq(task_name="眼动网格"):
+    global active_task_name
+    active_task_name = task_name
+    
+    # 1. 发送 UDP CMD_START 开始存储 NI-cDAQ 原始波形
     send_udp(f"CMD_START:{task_name}")
     print(f"[UDP] 发送 cDAQ 启动指令: CMD_START:{task_name}")
+    
+    # 2. 同步向脑电同步器发送 Task Start 硬件码
+    if trigger_device_instance is not None:
+        mark_code = "w20s"
+        if "X负半轴" in task_name:
+            mark_code = "w21s"
+        elif "X正半轴" in task_name:
+            mark_code = "w22s"
+        elif "Y正半轴" in task_name:
+            mark_code = "w23s"
+        elif "Y负半轴" in task_name:
+            mark_code = "w24s"
+        elif "眨眼" in task_name:
+            mark_code = "w25s"
+            
+        trigger_val = TRIGGER_MAPPING.get(mark_code, 150)
+        trigger_device_instance.send(trigger_val)
+        print(f"[Trigger] 发送任务启动硬件打标: {mark_code} -> {trigger_val}")
 
 def stop_daq():
+    global active_task_name
+    # 1. 发送 UDP CMD_STOP 停止 NI-cDAQ 存储
     send_udp("CMD_STOP")
     print("[UDP] 发送 cDAQ 停止指令: CMD_STOP")
+    
+    # 2. 同步向脑电同步器发送 Task End 硬件码
+    if trigger_device_instance is not None:
+        mark_code = "w20e"
+        if "X负半轴" in active_task_name:
+            mark_code = "w21e"
+        elif "X正半轴" in active_task_name:
+            mark_code = "w22e"
+        elif "Y正半轴" in active_task_name:
+            mark_code = "w23e"
+        elif "Y负半轴" in active_task_name:
+            mark_code = "w24e"
+        elif "眨眼" in active_task_name:
+            mark_code = "w25e"
+            
+        trigger_val = TRIGGER_MAPPING.get(mark_code, 151)
+        trigger_device_instance.send(trigger_val)
+        print(f"[Trigger] 发送任务结束硬件打标: {mark_code} -> {trigger_val}")
 
-# ========================== 2. 本地日志记录 ==========================
+# ========================== 4. 本地日志记录 ==========================
 log_file_path = ""
 experiment_start_time = 0.0
 
@@ -139,8 +250,38 @@ def log_event(trial_idx, grid_row, grid_col, px, py, event_type, desc=""):
     # 2. 发送 UDP 标记 (发送紧凑的可解析字符串，cDAQ GUI 收到后会保存在 meta.json)
     udp_msg = f"T_{trial_idx}_R{grid_row}C{grid_col}_{event_type}"
     send_udp(udp_msg)
+    
+    # 3. 硬件同步打标
+    if trigger_device_instance is not None:
+        # 获取十进制打标值
+        trigger_val = TRIGGER_MAPPING.get(udp_msg, None)
+        if trigger_val is None:
+            # 规则兜底计算
+            try:
+                c = int(grid_row) * int(config["paradigm"]["grid_size"]) + int(grid_col)
+                base = 10 + 8 * c
+                i = int(trial_idx) - 1
+                if "TARGET_START" in event_type or "TARGET_BEFORE" in event_type:
+                    trigger_val = base + 2 + 2 * i
+                elif "TARGET_END" in event_type or "TARGET_AFTER" in event_type:
+                    trigger_val = base + 2 + 2 * i + 1
+                elif "REST_START" in event_type:
+                    trigger_val = base + 2 + 2 * i - 1
+                elif "REST_END" in event_type:
+                    trigger_val = base + 2 + 2 * i
+                elif "BLINK_BEFORE" in event_type:
+                    trigger_val = base + 2 + 2 * i
+                elif "BLINK_AFTER" in event_type:
+                    trigger_val = base + 2 + 2 * i + 1
+                else:
+                    trigger_val = 255
+            except Exception:
+                trigger_val = 255
+                
+        trigger_device_instance.send(trigger_val)
+        print(f"[Trigger] 硬件打标: {udp_msg} -> {trigger_val}")
 
-# ========================== 3. 进程优先级提升 ==========================
+# ========================== 5. 进程优先级提升 ==========================
 def elevate_process_priority():
     """提升当前进程至 HIGH_PRIORITY_CLASS，减少 Windows 调度引起的计时抖动"""
     try:
@@ -160,16 +301,10 @@ def elevate_process_priority():
     except Exception as e:
         print(f"[System] 进程优先级提升异常: {e}")
 
-# ========================== 4. 高精度非阻塞等待 ==========================
+# ========================== 6. 高精度非阻塞等待 ==========================
 def precise_wait(duration_sec, root, get_paused_func, get_running_func):
     """
     高精度非阻塞等待，支持 10ms 级别的快速响应和精确计时。
-    
-    参数:
-        duration_sec: 等待秒数
-        root: Tkinter root 窗口对象
-        get_paused_func: 获取当前是否暂停的函数（返回 bool）
-        get_running_func: 获取当前是否运行 the function（返回 bool）
     """
     if not get_running_func():
         return
@@ -214,3 +349,22 @@ def precise_wait(duration_sec, root, get_paused_func, get_running_func):
             break
             
         time.sleep(0.01)  # 10ms 级别的紧凑轮询
+
+# ========================== 7. 启动参数配置引导 GUI ==========================
+def launch_setup_gui(paradigm_name="眼动范式"):
+    """
+    调用参数设置引导对话框，返回患者/被试姓名
+    """
+    global config
+    # 重新加载最新 config.json
+    config = load_config()
+    res = setup_gui.show_setup_gui(config, title_text=f"眼电采集系统配置控制台 - {paradigm_name}")
+    if res is None:
+        # 用户取消或关闭了设置窗口，直接退出程序
+        sys.exit(0)
+    
+    # 重新加载更新后的 config.json 并重新初始化 UDP 目标 IP 端口
+    config = load_config()
+    init_udp()
+    
+    return res["patient_name"]
