@@ -229,7 +229,7 @@ def key_control(e):
         except:
             pass
         try:
-            common.disconnect_jellyfish()
+            common.disconnect_triggerbox()
         except:
             pass
         try:
@@ -268,7 +268,7 @@ wait_start()
 common.elevate_process_priority()
 common.init_udp()
 common.init_log(patient_name, "眼动网格")
-common.connect_jellyfish()
+common.connect_triggerbox()
 
 # ========================== 9. 主实验循环 ==========================
 for idx, (tx, ty) in enumerate(positions):
@@ -427,7 +427,7 @@ if check_window_exists():
 
 if check_window_exists():
     try:
-        common.disconnect_jellyfish()
+        common.disconnect_triggerbox()
     except:
         pass
     try:

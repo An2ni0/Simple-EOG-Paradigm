@@ -27,7 +27,7 @@
         "direction_rest_sec": 3.0,
         "manual_confirm_direction": false
     },
-    "jellyfish": {
+    "triggerbox": {
         "com_port": "COM3",
         "baud_rate": 115200
     }

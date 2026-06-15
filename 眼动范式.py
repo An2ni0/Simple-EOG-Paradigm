@@ -174,7 +174,7 @@ def key_control(e):
         except:
             pass
         try:
-            common.disconnect_jellyfish()
+            common.disconnect_triggerbox()
         except:
             pass
         try:
@@ -219,7 +219,7 @@ wait_start()
 common.elevate_process_priority()
 common.init_udp()
 common.init_log(patient_name, "眼动网格")
-common.connect_jellyfish()
+common.connect_triggerbox()
 common.start_daq("眼动网格")
 
 # ========================== 9. 主实验循环 ==========================
@@ -305,7 +305,7 @@ if check_window_exists():
 # ========================== 10. 实验结束 ==========================
 # 停止远端 cDAQ 采集并断开脑电机连接
 common.stop_daq()
-common.disconnect_jellyfish()
+common.disconnect_triggerbox()
 
 if check_window_exists():
     set_text("✅ 实验全部完成！", font=FONT_LARGE)

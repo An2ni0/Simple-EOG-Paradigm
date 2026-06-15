@@ -364,18 +364,19 @@ This system uses a minimalist UDP alignment scheme without needing to parse volt
 
 ---
 
-## VIII. Jellyfish Hardware Real-time Synchronization
+## VIII. Neuracle TriggerBox Hardware Real-time Synchronization
 
-The system supports real-time trigger synchronization with the Jellyfish EEG machine over serial:
-- **Jellyfish Serial**: Writes single-byte triggers directly to the Jellyfish TriggerBox over serial connection (default COM3, 115200 bps).
+The system supports real-time trigger synchronization with the Neuracle EEG machine using its local library at `neuracle_lib.triggerBox` over serial:
+- **Neuracle Serial Connection**: Handled by the `TriggerIn` class inside `neuracle_lib/triggerBox.py`. It opens the specified COM port (e.g., `COM3`, configured in `config.json` under `"triggerbox"`) and validates the connection by sending a custom status package.
+- **Trigger Mapping**: Numeric event markers are sent directly using `.output_event_data(trigger_val)` (values 1–255).
 - The mapping is stored in `trigger_mappings.json`. Each grid position cell `c = row * 5 + col` (ranges 0-24) maps to a base value: `base = 10 + 8 * c`.
 - Trial start (`TARGET_START`/`BLINK_BEFORE`): `base + 2 + 2 * (trial_idx - 1)`
 - Trial end (`TARGET_END`/`BLINK_AFTER`): `base + 2 + 2 * (trial_idx - 1) + 1`
 
-## 八、 Jellyfish 脑电实时同步打标硬件接线与配置
+## 八、 Neuracle TriggerBox 脑电实时同步打标硬件接线与配置
 
-系统支持通过串口与 Jellyfish 脑电进行实时硬件打标同步：
-- **Jellyfish 串口打标**：向 Jellyfish 硬件打标盒写 1 字节的数据（默认 COM3，波特率 115200）。
+系统支持通过调用本地 `neuracle_lib.triggerBox` 库与 Neuracle 脑电设备进行实时串口硬件打标同步：
+- **Neuracle 串口打标**：由 `neuracle_lib/triggerBox.py` 中的 `TriggerIn` 类实现。通过 `config.json` 中的 `"triggerbox"` 配置段指定 COM 端口（默认 COM3）。建立连接后，系统使用 `.output_event_data(trigger_val)` 来进行打标控制。
 - 具体的数字 Trigger 映射均保存在 `trigger_mappings.json`。每个网格格点 `c = row * 5 + col`（0-24）对应的事件基准码计算公式为 `base = 10 + 8 * c`：
   - 试次开始（TARGET_START / BLINK_BEFORE）：`base + 2 + 2 * (trial_idx - 1)`
   - 试次结束（TARGET_END / BLINK_AFTER）：`base + 2 + 2 * (trial_idx - 1) + 1`

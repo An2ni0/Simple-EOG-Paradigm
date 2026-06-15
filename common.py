@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-EOG 采集系统公共辅助模块 - 增强版 (UDP同步 & Jellyfish脑电机打标 & 行为日志)
+EOG 采集系统公共辅助模块 - 增强版 (UDP同步 & Neuracle TriggerBox打标 & 行为日志)
 """
 import os
 import sys
@@ -21,7 +21,7 @@ DEFAULT_CONFIG = {
         "daq_pc_ip": "10.10.10.100",
         "udp_port": 55555
     },
-    "jellyfish": {
+    "triggerbox": {
         "com_port": "COM3",
         "baud_rate": 115200
     },
@@ -108,14 +108,14 @@ def send_udp(msg):
         except Exception as e:
             pass # UDP 开火即忘，防阻塞
 
-# ========================== 2. Jellyfish 脑电硬件同步 ==========================
-jellyfish_serial = None
-is_jellyfish_connected = False
+# ========================== 2. Neuracle TriggerBox 脑电硬件同步 ==========================
+triggerbox_device = None
+is_triggerbox_connected = False
 TRIGGER_MAPPING = {}
 active_task_name = "眼动网格"
 
-def connect_jellyfish():
-    global jellyfish_serial, is_jellyfish_connected, TRIGGER_MAPPING
+def connect_triggerbox():
+    global triggerbox_device, is_triggerbox_connected, TRIGGER_MAPPING
     # 1. 尝试从 trigger_mappings.json 中加载事件映射
     try:
         mappings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trigger_mappings.json")
@@ -123,41 +123,52 @@ def connect_jellyfish():
             with open(mappings_path, "r", encoding="utf-8") as f:
                 full_mappings = json.load(f)
                 TRIGGER_MAPPING = full_mappings.get("眼动网格", {})
-                print(f"[Jellyfish] 成功加载打标对照表，包含 {len(TRIGGER_MAPPING)} 个映射词条。")
+                print(f"[TriggerBox] 成功加载打标对照表，包含 {len(TRIGGER_MAPPING)} 个映射词条。")
         else:
-            print("[Jellyfish] 未找到 trigger_mappings.json，将使用动态计算的打标编码。")
+            print("[TriggerBox] 未找到 trigger_mappings.json，将使用动态计算的打标编码。")
             TRIGGER_MAPPING = {}
     except Exception as e:
-        print(f"[Jellyfish] 加载 mappings 失败: {e}")
+        print(f"[TriggerBox] 加载 mappings 失败: {e}")
         TRIGGER_MAPPING = {}
 
     # 2. 建立串口连接
-    com_port = config.get("jellyfish", {}).get("com_port", "COM3")
-    baud_rate = config.get("jellyfish", {}).get("baud_rate", 115200)
+    com_port = config.get("triggerbox", {}).get("com_port", "COM3")
+    
     try:
-        import serial
-    except ImportError:
-        print("❌ 错误：未安装 pyserial 库，硬件串口打标功能无法使用。请执行：pip install pyserial")
-        is_jellyfish_connected = False
+        # 确保 project 根目录在 sys.path 中，以便 import neuracle_lib 可用
+        proj_dir = os.path.dirname(os.path.abspath(__file__))
+        if proj_dir not in sys.path:
+            sys.path.append(proj_dir)
+        from neuracle_lib.triggerBox import TriggerIn
+    except ImportError as e:
+        print("❌ 错误：导入 neuracle_lib 失败，硬件打标功能无法使用。")
+        print(e)
+        is_triggerbox_connected = False
         return False
         
     try:
-        jellyfish_serial = serial.Serial(com_port, baud_rate, timeout=0.1)
-        is_jellyfish_connected = True
-        print(f"✅ Jellyfish TriggerBox串口连接成功！端口：{com_port}")
-        time.sleep(0.5)
-        # 初始化清零
-        jellyfish_serial.write(bytes([0]))
-        return True
+        triggerbox_device = TriggerIn(com_port)
+        if triggerbox_device.validate_device():
+            is_triggerbox_connected = True
+            print(f"✅ Neuracle TriggerBox 串口连接成功！端口：{com_port}")
+            time.sleep(0.5)
+            # 初始化清零
+            triggerbox_device.output_event_data(0)
+            return True
+        else:
+            print(f"❌ Neuracle TriggerBox 设备验证失败，端口：{com_port}")
+            is_triggerbox_connected = False
+            triggerbox_device = None
+            return False
     except Exception as e:
-        print(f"❌ Jellyfish TriggerBox串口连接失败：{str(e)}")
+        print(f"❌ Neuracle TriggerBox 串口连接/初始化失败：{str(e)}")
         print(f"   请检查 {com_port} 是否被占用，或设备是否连接。")
-        is_jellyfish_connected = False
-        jellyfish_serial = None
+        is_triggerbox_connected = False
+        triggerbox_device = None
         return False
 
-def send_jellyfish_mark(mark_code, mark_desc=""):
-    global jellyfish_serial, is_jellyfish_connected, TRIGGER_MAPPING
+def send_triggerbox_mark(mark_code, mark_desc=""):
+    global triggerbox_device, is_triggerbox_connected, TRIGGER_MAPPING
     
     trigger_val = TRIGGER_MAPPING.get(mark_code, None)
     if trigger_val is None:
@@ -213,28 +224,29 @@ def send_jellyfish_mark(mark_code, mark_desc=""):
     # 保证在 1-255 合法区间内
     trigger_val = max(1, min(255, int(trigger_val)))
     
-    if jellyfish_serial and is_jellyfish_connected:
+    if triggerbox_device and is_triggerbox_connected:
         try:
-            jellyfish_serial.write(bytes([trigger_val]))
-            print(f"📡 Jellyfish 硬件打标成功：{mark_code} -> 硬件码 {trigger_val} (desc: {mark_desc})")
+            triggerbox_device.output_event_data(trigger_val)
+            print(f"📡 Neuracle TriggerBox 硬件打标成功：{mark_code} -> 硬件码 {trigger_val} (desc: {mark_desc})")
         except Exception as e:
-            print(f"❌ Jellyfish 硬件打标失败 {mark_code}：{str(e)}")
+            print(f"❌ Neuracle TriggerBox 硬件打标失败 {mark_code}：{str(e)}")
     else:
-        print(f"⚠️ 未发送 Jellyfish 硬件打标 {mark_code}：串口未连接")
+        print(f"⚠️ 未发送 Neuracle TriggerBox 硬件打标 {mark_code}：串口未连接")
 
-def disconnect_jellyfish():
-    global jellyfish_serial, is_jellyfish_connected
-    if jellyfish_serial and is_jellyfish_connected:
+def disconnect_triggerbox():
+    global triggerbox_device, is_triggerbox_connected
+    if triggerbox_device and is_triggerbox_connected:
         try:
-            jellyfish_serial.write(bytes([0])) # 安全归零
-            jellyfish_serial.close()
-            is_jellyfish_connected = False
-            print("✅ Jellyfish 串口已安全断开")
+            triggerbox_device.output_event_data(0) # 安全归零
+            if triggerbox_device._device_comport_handle and triggerbox_device._device_comport_handle.isOpen():
+                triggerbox_device._device_comport_handle.close()
+            is_triggerbox_connected = False
+            print("✅ Neuracle TriggerBox 串口已安全断开")
         except Exception as e:
-            print(f"❌ Jellyfish 串口断开异常：{str(e)}")
-    elif jellyfish_serial:
-        jellyfish_serial = None
-        is_jellyfish_connected = False
+            print(f"❌ Neuracle TriggerBox 串口断开异常：{str(e)}")
+    elif triggerbox_device:
+        triggerbox_device = None
+        is_triggerbox_connected = False
 
 def start_daq(task_name="眼动网格"):
     global active_task_name
@@ -256,7 +268,7 @@ def start_daq(task_name="眼动网格"):
         mark_code = "w24s"
     elif "眨眼" in task_name:
         mark_code = "w25s"
-    send_jellyfish_mark(mark_code, f"启动任务 {task_name}")
+    send_triggerbox_mark(mark_code, f"启动任务 {task_name}")
 
 def stop_daq():
     global active_task_name
@@ -276,7 +288,7 @@ def stop_daq():
         mark_code = "w24e"
     elif "眨眼" in active_task_name:
         mark_code = "w25e"
-    send_jellyfish_mark(mark_code, f"停止任务 {active_task_name}")
+    send_triggerbox_mark(mark_code, f"停止任务 {active_task_name}")
 
 # ========================== 3. 本地日志记录 ==========================
 log_file_path = ""
@@ -321,7 +333,7 @@ def log_event(trial_idx, grid_row, grid_col, px, py, event_type, desc=""):
     send_udp(udp_msg)
     
     # 3. 硬件串口实时同步打标
-    send_jellyfish_mark(udp_msg, desc)
+    send_triggerbox_mark(udp_msg, desc)
 
 # ========================== 4. 进程优先级提升 ==========================
 def elevate_process_priority():
