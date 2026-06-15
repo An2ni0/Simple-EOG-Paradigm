@@ -28,7 +28,7 @@
         "manual_confirm_direction": false
     },
     "triggerbox": {
-        "com_port": "COM3",
+        "com_port": "COM5",
         "baud_rate": 115200
     }
 }
