@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-EOG 采集系统公共辅助模块 - 简化版 (UDP同步 & 行为日志)
+EOG 采集系统公共辅助模块 - 增强版 (UDP同步 & Jellyfish脑电机打标 & 行为日志)
 """
 import os
 import sys
@@ -8,14 +8,22 @@ import time
 import socket
 import ctypes
 from datetime import datetime
-
-# ========================== 1. UDP 配置与控制 ==========================
 import json
 
+try:
+    import serial
+except ImportError:
+    pass  # Allow import error, connect_jellyfish will raise descriptive error if serial is missing
+
+# ========================== 1. UDP 配置与控制 ==========================
 DEFAULT_CONFIG = {
     "network": {
         "daq_pc_ip": "10.10.10.100",
         "udp_port": 55555
+    },
+    "jellyfish": {
+        "com_port": "COM3",
+        "baud_rate": 115200
     },
     "daq_hardware": {
         "eog_emg_dev": "cDAQ1Mod8",
@@ -72,13 +80,23 @@ DAQ_UDP_PORT = config["network"]["udp_port"]
 udp_socket = None
 
 def init_udp():
-    global udp_socket
-    if udp_socket is None:
+    global udp_socket, DAQ_PC_IP, DAQ_UDP_PORT
+    # 动态刷新参数
+    DAQ_PC_IP = os.environ.get("DAQ_PC_IP", config["network"]["daq_pc_ip"])
+    DAQ_UDP_PORT = config["network"]["udp_port"]
+    
+    if udp_socket is not None:
         try:
-            udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            print(f"[UDP] Socket 初始化成功，目标: {DAQ_PC_IP}:{DAQ_UDP_PORT}")
-        except Exception as e:
-            print(f"[UDP] Socket 初始化失败: {e}")
+            udp_socket.close()
+        except:
+            pass
+        udp_socket = None
+        
+    try:
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        print(f"[UDP] Socket 初始化成功，目标: {DAQ_PC_IP}:{DAQ_UDP_PORT}")
+    except Exception as e:
+        print(f"[UDP] Socket 初始化失败: {e}")
 
 def send_udp(msg):
     global udp_socket
@@ -90,15 +108,177 @@ def send_udp(msg):
         except Exception as e:
             pass # UDP 开火即忘，防阻塞
 
+# ========================== 2. Jellyfish 脑电硬件同步 ==========================
+jellyfish_serial = None
+is_jellyfish_connected = False
+TRIGGER_MAPPING = {}
+active_task_name = "眼动网格"
+
+def connect_jellyfish():
+    global jellyfish_serial, is_jellyfish_connected, TRIGGER_MAPPING
+    # 1. 尝试从 trigger_mappings.json 中加载事件映射
+    try:
+        mappings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trigger_mappings.json")
+        if os.path.exists(mappings_path):
+            with open(mappings_path, "r", encoding="utf-8") as f:
+                full_mappings = json.load(f)
+                TRIGGER_MAPPING = full_mappings.get("眼动网格", {})
+                print(f"[Jellyfish] 成功加载打标对照表，包含 {len(TRIGGER_MAPPING)} 个映射词条。")
+        else:
+            print("[Jellyfish] 未找到 trigger_mappings.json，将使用动态计算的打标编码。")
+            TRIGGER_MAPPING = {}
+    except Exception as e:
+        print(f"[Jellyfish] 加载 mappings 失败: {e}")
+        TRIGGER_MAPPING = {}
+
+    # 2. 建立串口连接
+    com_port = config.get("jellyfish", {}).get("com_port", "COM3")
+    baud_rate = config.get("jellyfish", {}).get("baud_rate", 115200)
+    try:
+        import serial
+    except ImportError:
+        print("❌ 错误：未安装 pyserial 库，硬件串口打标功能无法使用。请执行：pip install pyserial")
+        is_jellyfish_connected = False
+        return False
+        
+    try:
+        jellyfish_serial = serial.Serial(com_port, baud_rate, timeout=0.1)
+        is_jellyfish_connected = True
+        print(f"✅ Jellyfish TriggerBox串口连接成功！端口：{com_port}")
+        time.sleep(0.5)
+        # 初始化清零
+        jellyfish_serial.write(bytes([0]))
+        return True
+    except Exception as e:
+        print(f"❌ Jellyfish TriggerBox串口连接失败：{str(e)}")
+        print(f"   请检查 {com_port} 是否被占用，或设备是否连接。")
+        is_jellyfish_connected = False
+        jellyfish_serial = None
+        return False
+
+def send_jellyfish_mark(mark_code, mark_desc=""):
+    global jellyfish_serial, is_jellyfish_connected, TRIGGER_MAPPING
+    
+    trigger_val = TRIGGER_MAPPING.get(mark_code, None)
+    if trigger_val is None:
+        # 如果是对齐试次的打标，支持动态规则计算
+        if str(mark_code).startswith("T_"):
+            try:
+                parts = str(mark_code).split("_")
+                trial_idx = int(parts[1])
+                coords = parts[2]
+                row = int(coords[1])
+                col = int(coords[3])
+                event_type = "_".join(parts[3:])
+                
+                c = row * 5 + col
+                base = 10 + 8 * c
+                i = trial_idx - 1
+                if "TARGET_START" in event_type or "TARGET_BEFORE" in event_type:
+                    trigger_val = base + 2 + 2 * i
+                elif "TARGET_END" in event_type or "TARGET_AFTER" in event_type:
+                    trigger_val = base + 2 + 2 * i + 1
+                elif "REST_START" in event_type:
+                    trigger_val = base + 2 + 2 * i - 1
+                elif "REST_END" in event_type:
+                    trigger_val = base + 2 + 2 * i
+                elif "BLINK_BEFORE" in event_type:
+                    trigger_val = base + 2 + 2 * i
+                elif "BLINK_AFTER" in event_type:
+                    trigger_val = base + 2 + 2 * i + 1
+                else:
+                    trigger_val = 255
+            except Exception:
+                trigger_val = 255
+        else:
+            # Task-level start/end mappings fallback
+            try:
+                trigger_val = int(mark_code)
+            except ValueError:
+                if mark_code == "w20s": trigger_val = 150
+                elif mark_code == "w20e": trigger_val = 151
+                elif mark_code == "w21s": trigger_val = 160
+                elif mark_code == "w21e": trigger_val = 161
+                elif mark_code == "w22s": trigger_val = 170
+                elif mark_code == "w22e": trigger_val = 171
+                elif mark_code == "w23s": trigger_val = 180
+                elif mark_code == "w23e": trigger_val = 181
+                elif mark_code == "w24s": trigger_val = 190
+                elif mark_code == "w24e": trigger_val = 191
+                elif mark_code == "w25s": trigger_val = 200
+                elif mark_code == "w25e": trigger_val = 201
+                else:
+                    trigger_val = 255
+                    
+    # 保证在 1-255 合法区间内
+    trigger_val = max(1, min(255, int(trigger_val)))
+    
+    if jellyfish_serial and is_jellyfish_connected:
+        try:
+            jellyfish_serial.write(bytes([trigger_val]))
+            print(f"📡 Jellyfish 硬件打标成功：{mark_code} -> 硬件码 {trigger_val} (desc: {mark_desc})")
+        except Exception as e:
+            print(f"❌ Jellyfish 硬件打标失败 {mark_code}：{str(e)}")
+    else:
+        print(f"⚠️ 未发送 Jellyfish 硬件打标 {mark_code}：串口未连接")
+
+def disconnect_jellyfish():
+    global jellyfish_serial, is_jellyfish_connected
+    if jellyfish_serial and is_jellyfish_connected:
+        try:
+            jellyfish_serial.write(bytes([0])) # 安全归零
+            jellyfish_serial.close()
+            is_jellyfish_connected = False
+            print("✅ Jellyfish 串口已安全断开")
+        except Exception as e:
+            print(f"❌ Jellyfish 串口断开异常：{str(e)}")
+    elif jellyfish_serial:
+        jellyfish_serial = None
+        is_jellyfish_connected = False
+
 def start_daq(task_name="眼动网格"):
+    global active_task_name
+    active_task_name = task_name
+    
+    # 1. 触发 UDP 开启 cDAQ 录制
     send_udp(f"CMD_START:{task_name}")
     print(f"[UDP] 发送 cDAQ 启动指令: CMD_START:{task_name}")
+    
+    # 2. 硬件串口打标
+    mark_code = "w20s"
+    if "X负半轴" in task_name:
+        mark_code = "w21s"
+    elif "X正半轴" in task_name:
+        mark_code = "w22s"
+    elif "Y正半轴" in task_name:
+        mark_code = "w23s"
+    elif "Y负半轴" in task_name:
+        mark_code = "w24s"
+    elif "眨眼" in task_name:
+        mark_code = "w25s"
+    send_jellyfish_mark(mark_code, f"启动任务 {task_name}")
 
 def stop_daq():
+    global active_task_name
+    # 1. 触发 UDP 停止 cDAQ 录制
     send_udp("CMD_STOP")
     print("[UDP] 发送 cDAQ 停止指令: CMD_STOP")
+    
+    # 2. 硬件串口打标
+    mark_code = "w20e"
+    if "X负半轴" in active_task_name:
+        mark_code = "w21e"
+    elif "X正半轴" in active_task_name:
+        mark_code = "w22e"
+    elif "Y正半轴" in active_task_name:
+        mark_code = "w23e"
+    elif "Y负半轴" in active_task_name:
+        mark_code = "w24e"
+    elif "眨眼" in active_task_name:
+        mark_code = "w25e"
+    send_jellyfish_mark(mark_code, f"停止任务 {active_task_name}")
 
-# ========================== 2. 本地日志记录 ==========================
+# ========================== 3. 本地日志记录 ==========================
 log_file_path = ""
 experiment_start_time = 0.0
 
@@ -139,8 +319,11 @@ def log_event(trial_idx, grid_row, grid_col, px, py, event_type, desc=""):
     # 2. 发送 UDP 标记 (发送紧凑的可解析字符串，cDAQ GUI 收到后会保存在 meta.json)
     udp_msg = f"T_{trial_idx}_R{grid_row}C{grid_col}_{event_type}"
     send_udp(udp_msg)
+    
+    # 3. 硬件串口实时同步打标
+    send_jellyfish_mark(udp_msg, desc)
 
-# ========================== 3. 进程优先级提升 ==========================
+# ========================== 4. 进程优先级提升 ==========================
 def elevate_process_priority():
     """提升当前进程至 HIGH_PRIORITY_CLASS，减少 Windows 调度引起的计时抖动"""
     try:
@@ -160,16 +343,10 @@ def elevate_process_priority():
     except Exception as e:
         print(f"[System] 进程优先级提升异常: {e}")
 
-# ========================== 4. 高精度非阻塞等待 ==========================
+# ========================== 5. 高精度非阻塞等待 ==========================
 def precise_wait(duration_sec, root, get_paused_func, get_running_func):
     """
     高精度非阻塞等待，支持 10ms 级别的快速响应和精确计时。
-    
-    参数:
-        duration_sec: 等待秒数
-        root: Tkinter root 窗口对象
-        get_paused_func: 获取当前是否暂停的函数（返回 bool）
-        get_running_func: 获取当前是否运行 the function（返回 bool）
     """
     if not get_running_func():
         return

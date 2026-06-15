@@ -174,6 +174,10 @@ def key_control(e):
         except:
             pass
         try:
+            common.disconnect_jellyfish()
+        except:
+            pass
+        try:
             root.destroy()
         except:
             pass
@@ -211,10 +215,11 @@ time.sleep(1)
 set_text("按回车键开始实验\nESC退出  空格暂停")
 wait_start()
 
-# 提权进程，初始化网络与本地日志
+# 提权进程，初始化网络与本地日志并连接脑电机
 common.elevate_process_priority()
 common.init_udp()
 common.init_log(patient_name, "眼动网格")
+common.connect_jellyfish()
 common.start_daq("眼动网格")
 
 # ========================== 9. 主实验循环 ==========================
@@ -298,8 +303,9 @@ if check_window_exists():
     common.precise_wait(1.0, root, lambda: paused, lambda: running)
 
 # ========================== 10. 实验结束 ==========================
-# 停止远端 cDAQ 采集
+# 停止远端 cDAQ 采集并断开脑电机连接
 common.stop_daq()
+common.disconnect_jellyfish()
 
 if check_window_exists():
     set_text("✅ 实验全部完成！", font=FONT_LARGE)

@@ -1,10 +1,10 @@
 {
     "network": {
-        "daq_pc_ip": "10.10.10.100",
+        "daq_pc_ip": "192.168.1.101",
         "udp_port": 55555
     },
     "daq_hardware": {
-        "eog_emg_dev": "cDAQ1Mod8",
+        "eog_emg_dev": "cDAQ2Mod4",
         "eog_emg_chans": [
             "ai0",
             "ai2",
@@ -26,5 +26,9 @@
         "repeat_per_cell": 2,
         "direction_rest_sec": 3.0,
         "manual_confirm_direction": false
+    },
+    "jellyfish": {
+        "com_port": "COM3",
+        "baud_rate": 115200
     }
 }

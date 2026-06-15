@@ -362,4 +362,23 @@ This system uses a minimalist UDP alignment scheme without needing to parse volt
     *   由于受试者在红点亮起后，通常需要 `150ms ~ 300ms` 的反应时间（扫视期）眼球才真正动过去。
     *   **建议分析窗**：提取 `TARGET_START` **后延 350ms** 至 `TARGET_END` 的数据切片作为稳定期进行平均，以剔除反应时（Reaction Time）对注视空间建模的干扰。
 
+---
+
+## VIII. Jellyfish Hardware Real-time Synchronization
+
+The system supports real-time trigger synchronization with the Jellyfish EEG machine over serial:
+- **Jellyfish Serial**: Writes single-byte triggers directly to the Jellyfish TriggerBox over serial connection (default COM3, 115200 bps).
+- The mapping is stored in `trigger_mappings.json`. Each grid position cell `c = row * 5 + col` (ranges 0-24) maps to a base value: `base = 10 + 8 * c`.
+- Trial start (`TARGET_START`/`BLINK_BEFORE`): `base + 2 + 2 * (trial_idx - 1)`
+- Trial end (`TARGET_END`/`BLINK_AFTER`): `base + 2 + 2 * (trial_idx - 1) + 1`
+
+## 八、 Jellyfish 脑电实时同步打标硬件接线与配置
+
+系统支持通过串口与 Jellyfish 脑电进行实时硬件打标同步：
+- **Jellyfish 串口打标**：向 Jellyfish 硬件打标盒写 1 字节的数据（默认 COM3，波特率 115200）。
+- 具体的数字 Trigger 映射均保存在 `trigger_mappings.json`。每个网格格点 `c = row * 5 + col`（0-24）对应的事件基准码计算公式为 `base = 10 + 8 * c`：
+  - 试次开始（TARGET_START / BLINK_BEFORE）：`base + 2 + 2 * (trial_idx - 1)`
+  - 试次结束（TARGET_END / BLINK_AFTER）：`base + 2 + 2 * (trial_idx - 1) + 1`
+
+
 
