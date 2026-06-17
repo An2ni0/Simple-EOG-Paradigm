@@ -13,6 +13,14 @@ import pyqtgraph as pg
 import json
 import os
 
+# Reconfigure stdout/stderr to UTF-8 on Windows to prevent UnicodeEncodeError
+if sys.platform.startswith('win'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
+
 # --- 读取配置文件 config.json ---
 DEFAULT_CONFIG = {
     "network": {
@@ -21,13 +29,22 @@ DEFAULT_CONFIG = {
     },
     "daq_hardware": {
         "eog_emg_dev": "cDAQ1Mod8",
-        "eog_emg_chans": ["ai0", "ai2", "ai6"],
-        "__comment_channel_mappings__": "横向电极默认ai0(hEOG)，右眼纵向电极默认ai2(vEOG_right)，左眼纵向电极默认ai6(vEOG_left)",
-        "channel_mappings": {
-            "hEOG": "ai0",
-            "vEOG_right": "ai2",
-            "vEOG_left": "ai6"
-        },
+        "trigger_dev": "cDAQ1Mod1",
+        "eog_emg_chans": [
+            {"name": "ai0", "alias": "hEOG", "mode": "DIFF"},
+            {"name": "ai2", "alias": "vEOG_right", "mode": "DIFF"},
+            {"name": "ai6", "alias": "vEOG_left", "mode": "DIFF"}
+        ],
+        "trigger_chans": [
+            {"name": "ai16", "alias": "Bit0", "mode": "RSE"},
+            {"name": "ai17", "alias": "Bit1", "mode": "RSE"},
+            {"name": "ai18", "alias": "Bit2", "mode": "RSE"},
+            {"name": "ai19", "alias": "Bit3", "mode": "RSE"},
+            {"name": "ai20", "alias": "Bit4", "mode": "RSE"},
+            {"name": "ai21", "alias": "Bit5", "mode": "RSE"},
+            {"name": "ai22", "alias": "Bit6", "mode": "RSE"},
+            {"name": "ai23", "alias": "Bit7", "mode": "RSE"}
+        ],
         "sample_rate": 10000,
         "display_seconds": 5
     }
@@ -47,6 +64,17 @@ def load_config():
 
 config = load_config()
 
+def get_terminal_config(mode_str):
+    mode_upper = mode_str.upper()
+    if "DIFF" in mode_upper:
+        return TerminalConfiguration.DIFF
+    elif "RSE" in mode_upper:
+        return TerminalConfiguration.RSE
+    elif "NRSE" in mode_upper:
+        return TerminalConfiguration.NRSE
+    else:
+        return TerminalConfiguration.DEFAULT
+
 # --- 配置区 ---
 UDP_IP = "0.0.0.0"
 UDP_PORT = config.get("network", {}).get("udp_port", 55555)
@@ -54,11 +82,15 @@ UDP_PORT = config.get("network", {}).get("udp_port", 55555)
 # --- cDAQ 模块与通道分配 ---
 daq_hw = config.get("daq_hardware", {})
 EOG_EMG_DEV = daq_hw.get("eog_emg_dev", "cDAQ1Mod8")   # EOG/EMG 采集卡所在槽位
-EOG_EMG_CHANS = daq_hw.get("eog_emg_chans", ['ai0', 'ai2', 'ai6'])
+TRIGGER_DEV = daq_hw.get("trigger_dev", "cDAQ1Mod1")   # 触发信号采集卡所在槽位
+
+EOG_EMG_CHANS = daq_hw.get("eog_emg_chans", [])
+TRIGGER_CHANS = daq_hw.get("trigger_chans", [])
 
 # 拼装成唯一的物理通道名称以分配给 Task
-EOG_EMG_PHYS_CHANS = [f"{EOG_EMG_DEV}/{ch}" for ch in EOG_EMG_CHANS]
-CHANNELS = EOG_EMG_PHYS_CHANS
+EOG_EMG_PHYS_CHANS = [f"{EOG_EMG_DEV}/{ch['name']}" for ch in EOG_EMG_CHANS]
+TRIGGER_PHYS_CHANS = [f"{TRIGGER_DEV}/{ch['name']}" for ch in TRIGGER_CHANS]
+CHANNELS = EOG_EMG_PHYS_CHANS + TRIGGER_PHYS_CHANS
 NUM_CHANNELS = len(CHANNELS)
 SAMPLE_RATE = daq_hw.get("sample_rate", 10000)  # 目前实际使用的是 10kHz，最高30kHz
 DISPLAY_SECONDS = daq_hw.get("display_seconds", 5)  # 屏幕上显示最近 5 秒的波形
@@ -66,13 +98,14 @@ DISPLAY_SECONDS = daq_hw.get("display_seconds", 5)  # 屏幕上显示最近 5 �
 class DAQMonitorApp(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"NI-cDAQ 分布式实时采集监控系统 ({NUM_CHANNELS}通道独立显示)")
+        self.setWindowTitle("NI-cDAQ 分布式实时采集监控系统 (多通道独立显示)")
         self.resize(1200, 900)
         
         # 状态变量
         self.is_recording = False
         self.record_requested = False
         self.stop_requested = False
+        self.reinit_requested = False
         self.record_start_time = 0
         self.sample_counter = 0
         self.session_sample_counter = 0
@@ -152,7 +185,7 @@ class DAQMonitorApp(QtWidgets.QMainWindow):
             else:
                 plot.hideAxis('bottom')
                 
-            curve = plot.plot(pen=pg.mkPen(color=colors[i], width=1))
+            curve = plot.plot(pen=pg.mkPen(color=colors[i % len(colors)], width=1))
             self.plots.append(plot)
             self.curves.append(curve)
 
@@ -172,7 +205,20 @@ class DAQMonitorApp(QtWidgets.QMainWindow):
                 # 瞬间抓取当前会话的样本点数（用于对齐事件坐标）
                 current_sample = self.session_sample_counter 
                 
-                if msg.startswith("CMD_START"):
+                if msg.startswith("CONFIG_SYNC:"):
+                    parts = msg.split(":", 1)
+                    if len(parts) > 1:
+                        cfg_str = parts[1]
+                        try:
+                            new_cfg = json.loads(cfg_str)
+                            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+                            with open(config_path, "w", encoding="utf-8") as f:
+                                json.dump(new_cfg, f, indent=4, ensure_ascii=False)
+                            print("[Config] 收到网络配置同步包，已更新本地 config.json")
+                            self.reinit_requested = True
+                        except Exception as e:
+                            print(f"[Config] 解析/保存网络同步配置失败: {e}")
+                elif msg.startswith("CMD_START"):
                     parts = msg.split(":", 1)
                     self.current_task_name = parts[1] if len(parts) > 1 else "Unknown"
                     self.record_requested = True
@@ -199,84 +245,160 @@ class DAQMonitorApp(QtWidgets.QMainWindow):
         self.daq_thread.start()
         
     def daq_worker(self):
-        try:
-            with nidaqmx.Task() as task:
-                # 添加 EOG/EMG 通道 (显式设置为差分输入, 范围 [-0.2V, 0.2V])
-                for ch_name in EOG_EMG_PHYS_CHANS:
-                    task.ai_channels.add_ai_voltage_chan(
-                        ch_name,
-                        terminal_config=TerminalConfiguration.DIFF,
-                        min_val=-0.2, max_val=0.2
-                    )
-                task.timing.cfg_samp_clk_timing(SAMPLE_RATE, sample_mode=AcquisitionType.CONTINUOUS)
-                task.in_stream.input_buf_size = SAMPLE_RATE * 2 # 防溢出大缓冲
+        while True:
+            try:
+                # 重新加载配置文件以应用最新同步的参数
+                global config, EOG_EMG_DEV, TRIGGER_DEV, EOG_EMG_CHANS, TRIGGER_CHANS
+                global EOG_EMG_PHYS_CHANS, TRIGGER_PHYS_CHANS, CHANNELS, NUM_CHANNELS, SAMPLE_RATE, DISPLAY_SECONDS
                 
-                task.start()
-                read_chunk = int(SAMPLE_RATE * 0.05) # 每次读 50ms
+                config = load_config()
+                daq_hw = config.get("daq_hardware", {})
+                EOG_EMG_DEV = daq_hw.get("eog_emg_dev", "cDAQ1Mod8")
+                TRIGGER_DEV = daq_hw.get("trigger_dev", "cDAQ1Mod1")
+                EOG_EMG_CHANS = daq_hw.get("eog_emg_chans", [])
+                TRIGGER_CHANS = daq_hw.get("trigger_chans", [])
                 
-                loop_cnt = 0
-                while True:
-                    # 阻塞读取硬件数据
-                    data = task.read(number_of_samples_per_channel=read_chunk)
-                    np_data = np.array(data, dtype=np.float64)
-                    chunk_size = np_data.shape[1]
+                EOG_EMG_PHYS_CHANS = [f"{EOG_EMG_DEV}/{ch['name']}" for ch in EOG_EMG_CHANS]
+                TRIGGER_PHYS_CHANS = [f"{TRIGGER_DEV}/{ch['name']}" for ch in TRIGGER_CHANS]
+                CHANNELS = EOG_EMG_PHYS_CHANS + TRIGGER_PHYS_CHANS
+                NUM_CHANNELS = len(CHANNELS)
+                SAMPLE_RATE = daq_hw.get("sample_rate", 10000)
+                DISPLAY_SECONDS = daq_hw.get("display_seconds", 5)
+                
+                # 动态刷新数据缓冲区大小和X轴
+                self.display_pts = SAMPLE_RATE * DISPLAY_SECONDS
+                self.data_buffer = np.zeros((NUM_CHANNELS, self.display_pts))
+                self.time_axis = np.linspace(-DISPLAY_SECONDS, 0, self.display_pts)
+                
+                # 在主GUI线程重新绘制波形窗口
+                QtCore.QMetaObject.invokeMethod(self, "recreate_plots_ui", QtCore.Qt.QueuedConnection)
+                
+                with nidaqmx.Task() as task:
+                    # 添加 EOG/EMG 通道
+                    for ch in EOG_EMG_CHANS:
+                        ch_name = f"{EOG_EMG_DEV}/{ch['name']}"
+                        mode = get_terminal_config(ch.get("mode", "DIFF"))
+                        task.ai_channels.add_ai_voltage_chan(
+                            ch_name,
+                            terminal_config=mode,
+                            min_val=-0.2, max_val=0.2
+                        )
+                    # 添加 Trigger 通道
+                    for ch in TRIGGER_CHANS:
+                        ch_name = f"{TRIGGER_DEV}/{ch['name']}"
+                        mode = get_terminal_config(ch.get("mode", "RSE"))
+                        task.ai_channels.add_ai_voltage_chan(
+                            ch_name,
+                            terminal_config=mode,
+                            min_val=-5.0, max_val=5.0
+                        )
+                    task.timing.cfg_samp_clk_timing(SAMPLE_RATE, sample_mode=AcquisitionType.CONTINUOUS)
+                    task.in_stream.input_buf_size = SAMPLE_RATE * 2 # 防溢出大缓冲
                     
-                    self.sample_counter += chunk_size
+                    task.start()
+                    read_chunk = int(SAMPLE_RATE * 0.05) # 每次读 50ms
                     
-                    # 检查开始录制请求（由独立线程切换文件环境，避免数据竞争丢失）
-                    if self.record_requested and not self.is_recording:
-                        self.record_requested = False
-                        os.makedirs("EOG", exist_ok=True)
-                        time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-                        bin_path = f"EOG/DAQ_Data_{time_str}.bin"
-                        self.meta_filename = f"EOG/DAQ_Data_{time_str}_meta.json"
+                    loop_cnt = 0
+                    while not self.reinit_requested:
+                        # 阻塞读取硬件数据
+                        data = task.read(number_of_samples_per_channel=read_chunk)
+                        np_data = np.array(data, dtype=np.float64)
+                        chunk_size = np_data.shape[1]
                         
-                        self.bin_file = open(bin_path, 'wb')
-                        self.event_log = []
-                        self.record_start_time = time.time()
-                        self.session_sample_counter = 0
-                        self.is_recording = True
-                        QtCore.QMetaObject.invokeMethod(self, "update_status_recording", QtCore.Qt.QueuedConnection)
+                        self.sample_counter += chunk_size
                         
-                    # 1. 存盘 (如果处于录制状态)
-                    if self.is_recording and self.bin_file:
-                        self.session_sample_counter += chunk_size
-                        self.bin_file.write(np_data.tobytes())
-                        loop_cnt += 1
-                        if loop_cnt % 20 == 0:
-                            os.fsync(self.bin_file.fileno()) # 每秒落盘一次
+                        # 检查开始录制请求（由独立线程切换文件环境，避免数据竞争丢失）
+                        if self.record_requested and not self.is_recording:
+                            self.record_requested = False
+                            os.makedirs("EOG", exist_ok=True)
+                            time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+                            bin_path = f"EOG/DAQ_Data_{time_str}.bin"
+                            self.meta_filename = f"EOG/DAQ_Data_{time_str}_meta.json"
                             
-                        # 检查停止录制请求（确保最后一块数据已经 write 之后再 close）
-                        if self.stop_requested:
-                            self.stop_requested = False
-                            self.is_recording = False
+                            self.bin_file = open(bin_path, 'wb')
+                            self.event_log = []
+                            self.record_start_time = time.time()
+                            self.session_sample_counter = 0
+                            self.is_recording = True
+                            QtCore.QMetaObject.invokeMethod(self, "update_status_recording", QtCore.Qt.QueuedConnection)
                             
-                            self.bin_file.close()
-                            self.bin_file = None
-                            
-                            # 保存正确的元数据
-                            meta_info = {
-                                "rate": SAMPLE_RATE,
-                                "chunk_size": read_chunk,
-                                "total_samples": self.session_sample_counter,
-                                "task_name": getattr(self, "current_task_name", "Unknown"),
-                                "channels": CHANNELS,
-                                "eog_emg_dev": EOG_EMG_DEV,
-                                "channel_mappings": daq_hw.get("channel_mappings", {}),
-                                "events": self.event_log
-                            }
-                            with open(self.meta_filename, 'w', encoding='utf-8') as f:
-                                json.dump(meta_info, f, indent=4, ensure_ascii=False)
+                        # 1. 存盘 (如果处于录制状态)
+                        if self.is_recording and self.bin_file:
+                            self.session_sample_counter += chunk_size
+                            self.bin_file.write(np_data.tobytes())
+                            loop_cnt += 1
+                            if loop_cnt % 20 == 0:
+                                os.fsync(self.bin_file.fileno()) # 每秒落盘一次
                                 
-                            QtCore.QMetaObject.invokeMethod(self, "update_status_idle", QtCore.Qt.QueuedConnection)
-                            
-                    # 2. 更新显示缓冲区 (环形覆盖)
-                    pts_to_copy = min(chunk_size, self.display_pts)
-                    self.data_buffer = np.roll(self.data_buffer, -pts_to_copy, axis=1)
-                    self.data_buffer[:, -pts_to_copy:] = np_data[:, -pts_to_copy:]
+                            # 检查停止录制请求（确保最后一块数据已经 write 之后再 close）
+                            if self.stop_requested:
+                                self.stop_requested = False
+                                self.is_recording = False
+                                
+                                self.bin_file.close()
+                                self.bin_file = None
+                                
+                                # 保存正确的元数据
+                                meta_info = {
+                                    "rate": SAMPLE_RATE,
+                                    "chunk_size": read_chunk,
+                                    "total_samples": self.session_sample_counter,
+                                    "task_name": getattr(self, "current_task_name", "Unknown"),
+                                    "channels": CHANNELS,
+                                    "all_channels_info": EOG_EMG_CHANS + TRIGGER_CHANS,
+                                    "eog_emg_dev": EOG_EMG_DEV,
+                                    "trigger_dev": TRIGGER_DEV,
+                                    "events": self.event_log
+                                }
+                                with open(self.meta_filename, 'w', encoding='utf-8') as f:
+                                    json.dump(meta_info, f, indent=4, ensure_ascii=False)
+                                    
+                                QtCore.QMetaObject.invokeMethod(self, "update_status_idle", QtCore.Qt.QueuedConnection)
+                                
+                        # 2. 更新显示缓冲区 (环形覆盖)
+                        pts_to_copy = min(chunk_size, self.display_pts)
+                        self.data_buffer = np.roll(self.data_buffer, -pts_to_copy, axis=1)
+                        self.data_buffer[:, -pts_to_copy:] = np_data[:, -pts_to_copy:]
+                
+                if self.reinit_requested:
+                    self.reinit_requested = False
+                    print("[Config] 正在重新初始化 NI-DAQ 采集任务...")
+                    time.sleep(0.1)
+                    continue
                     
-        except Exception as e:
-            QtCore.QMetaObject.invokeMethod(self, "show_error", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, str(e)))
+            except Exception as e:
+                QtCore.QMetaObject.invokeMethod(self, "show_error", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, str(e)))
+                time.sleep(2)
+
+    @QtCore.pyqtSlot()
+    def recreate_plots_ui(self):
+        # 清空原有子图
+        self.graph_layout.clear()
+        self.plots = []
+        self.curves = []
+        self.active_markers = []  # Config reset, clear old markers
+        
+        colors = [
+            (255, 100, 100), (100, 255, 100), (100, 100, 255), (255, 255, 100),
+            (100, 255, 255), (255, 100, 255), (255, 255, 255), (255, 150, 50),
+            (150, 100, 255), (100, 255, 150), (255, 100, 150), (150, 255, 100)
+        ]
+        
+        for i in range(NUM_CHANNELS):
+            plot = self.graph_layout.addPlot(row=i, col=0)
+            plot.setLabel('left', f'{CHANNELS[i]} (V)')
+            plot.setXRange(-DISPLAY_SECONDS, 0)
+            plot.enableAutoRange(axis='y', enable=True)
+            plot.setAutoVisible(y=True)
+            
+            if i == NUM_CHANNELS - 1:
+                plot.setLabel('bottom', '时间 (秒)')
+            else:
+                plot.hideAxis('bottom')
+                
+            curve = plot.plot(pen=pg.mkPen(color=colors[i % len(colors)], width=1))
+            self.plots.append(plot)
+            self.curves.append(curve)
 
     # ------------------ UI 控制与刷新 ------------------
     @QtCore.pyqtSlot()
@@ -306,7 +428,8 @@ class DAQMonitorApp(QtWidgets.QMainWindow):
         
         # 1. 刷新波形 (为了性能，绘图时每 10 个点抽样 1 个)
         downsample = 10 
-        for i in range(NUM_CHANNELS):
+        num_plots = min(NUM_CHANNELS, len(self.curves), self.data_buffer.shape[0])
+        for i in range(num_plots):
             self.curves[i].setData(self.time_axis[::downsample], self.data_buffer[i, ::downsample])
             
         # 2. 刷新计时器
@@ -326,7 +449,8 @@ class DAQMonitorApp(QtWidgets.QMainWindow):
                 "text": None
             }
             # 在所有的图里都画一条垂直线
-            for i in range(NUM_CHANNELS):
+            num_plots_active = min(NUM_CHANNELS, len(self.plots))
+            for i in range(num_plots_active):
                 v_line = pg.InfiniteLine(pos=0, angle=90, movable=False, pen=pg.mkPen('y', width=2))
                 self.plots[i].addItem(v_line)
                 marker_dict["lines"].append(v_line)
@@ -349,17 +473,31 @@ class DAQMonitorApp(QtWidgets.QMainWindow):
             # 如果它已经移出了 -DISPLAY_SECONDS 的范围外，就删除它
             if time_offset < -DISPLAY_SECONDS:
                 for i, v_line in enumerate(marker["lines"]):
-                    self.plots[i].removeItem(v_line)
-                self.plots[0].removeItem(marker["text"])
+                    if i < len(self.plots):
+                        try:
+                            self.plots[i].removeItem(v_line)
+                        except Exception:
+                            pass
+                if marker["text"] and len(self.plots) > 0:
+                    try:
+                        self.plots[0].removeItem(marker["text"])
+                    except Exception:
+                        pass
             else:
                 # 否则更新它的 X 坐标
                 for v_line in marker["lines"]:
-                    v_line.setPos(time_offset)
-                if marker["text"]:
-                    # Y轴现在是自动伸缩的，因此把文字附着在视图当前的上面
-                    view_rect = self.plots[0].viewRange()
-                    y_top = view_rect[1][1]
-                    marker["text"].setPos(time_offset, y_top)
+                    try:
+                        v_line.setPos(time_offset)
+                    except Exception:
+                        pass
+                if marker["text"] and len(self.plots) > 0:
+                    try:
+                        # Y轴现在是自动伸缩的，因此把文字附着在视图当前的上面
+                        view_rect = self.plots[0].viewRange()
+                        y_top = view_rect[1][1]
+                        marker["text"].setPos(time_offset, y_top)
+                    except Exception:
+                        pass
                 alive_markers.append(marker)
                 
         self.active_markers = alive_markers

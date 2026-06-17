@@ -12,17 +12,22 @@
     },
     "daq_hardware": {
         "eog_emg_dev": "cDAQ1Mod8",
+        "trigger_dev": "cDAQ1Mod1",
         "eog_emg_chans": [
-            "ai0",
-            "ai2",
-            "ai6"
+            {"name": "ai0", "alias": "hEOG", "mode": "DIFF"},
+            {"name": "ai2", "alias": "vEOG_right", "mode": "DIFF"},
+            {"name": "ai6", "alias": "vEOG_left", "mode": "DIFF"}
         ],
-        "__comment_channel_mappings__": "横向电极默认ai0(hEOG)，右眼纵向电极默认ai2(vEOG_right)，左眼纵向电极默认ai6(vEOG_left)",
-        "channel_mappings": {
-            "hEOG": "ai0",
-            "vEOG_right": "ai2",
-            "vEOG_left": "ai6"
-        },
+        "trigger_chans": [
+            {"name": "ai16", "alias": "Bit0", "mode": "RSE"},
+            {"name": "ai17", "alias": "Bit1", "mode": "RSE"},
+            {"name": "ai18", "alias": "Bit2", "mode": "RSE"},
+            {"name": "ai19", "alias": "Bit3", "mode": "RSE"},
+            {"name": "ai20", "alias": "Bit4", "mode": "RSE"},
+            {"name": "ai21", "alias": "Bit5", "mode": "RSE"},
+            {"name": "ai22", "alias": "Bit6", "mode": "RSE"},
+            {"name": "ai23", "alias": "Bit7", "mode": "RSE"}
+        ],
         "sample_rate": 10000,
         "display_seconds": 5
     },

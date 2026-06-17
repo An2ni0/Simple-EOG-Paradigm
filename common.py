@@ -29,13 +29,22 @@ DEFAULT_CONFIG = {
     },
     "daq_hardware": {
         "eog_emg_dev": "cDAQ1Mod8",
-        "eog_emg_chans": ["ai0", "ai2", "ai6"],
-        "__comment_channel_mappings__": "横向电极默认ai0(hEOG)，右眼纵向电极默认ai2(vEOG_right)，左眼纵向电极默认ai6(vEOG_left)",
-        "channel_mappings": {
-            "hEOG": "ai0",
-            "vEOG_right": "ai2",
-            "vEOG_left": "ai6"
-        },
+        "trigger_dev": "cDAQ1Mod1",
+        "eog_emg_chans": [
+            {"name": "ai0", "alias": "hEOG", "mode": "DIFF"},
+            {"name": "ai2", "alias": "vEOG_right", "mode": "DIFF"},
+            {"name": "ai6", "alias": "vEOG_left", "mode": "DIFF"}
+        ],
+        "trigger_chans": [
+            {"name": "ai16", "alias": "Bit0", "mode": "RSE"},
+            {"name": "ai17", "alias": "Bit1", "mode": "RSE"},
+            {"name": "ai18", "alias": "Bit2", "mode": "RSE"},
+            {"name": "ai19", "alias": "Bit3", "mode": "RSE"},
+            {"name": "ai20", "alias": "Bit4", "mode": "RSE"},
+            {"name": "ai21", "alias": "Bit5", "mode": "RSE"},
+            {"name": "ai22", "alias": "Bit6", "mode": "RSE"},
+            {"name": "ai23", "alias": "Bit7", "mode": "RSE"}
+        ],
         "sample_rate": 10000,
         "display_seconds": 5
     },
@@ -163,6 +172,20 @@ def start_daq(task_name="眼动网格"):
     global active_task_name
     active_task_name = task_name
     
+    # 0. 读取本地最新的 config.json 并发送 CONFIG_SYNC 包
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg_data = json.load(f)
+            cfg_str = json.dumps(cfg_data)
+            msg_cfg = f"CONFIG_SYNC:{cfg_str}"
+            send_udp(msg_cfg)
+            print("[UDP] 发送 DAQ 配置同步指令 (CONFIG_SYNC)")
+            time.sleep(0.2)  # 给采集卡端预留 200ms 用于重新配置和初始化任务
+        except Exception as e:
+            print(f"[UDP] 发送 DAQ 配置同步指令失败: {e}")
+            
     # 1. 发送 UDP CMD_START 开始存储 NI-cDAQ 原始波形
     send_udp(f"CMD_START:{task_name}")
     print(f"[UDP] 发送 cDAQ 启动指令: CMD_START:{task_name}")
