@@ -13,7 +13,7 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
         self.setWindowTitle("EOG & DAQ Hardware Sync Visualizer")
         self.resize(1350, 850)
         
-        # Stylesheet for a modern, clean, premium UI look
+        # Stylesheet for a modern, clean, premium UI look with High DPI compatible font sizing
         self.setStyleSheet("""
             QMainWindow {
                 background-color: #f4f5f7;
@@ -22,7 +22,7 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                 font-family: "Segoe UI", Arial, sans-serif;
             }
             QGroupBox {
-                font-size: 12px;
+                font-size: 10pt;
                 font-weight: bold;
                 border: 1px solid #dcdfe6;
                 border-radius: 6px;
@@ -44,7 +44,7 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                 border-radius: 4px;
                 padding: 8px 16px;
                 font-weight: bold;
-                font-size: 12px;
+                font-size: 10pt;
             }
             QPushButton:hover {
                 background-color: #66b1ff;
@@ -54,14 +54,14 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
             }
             QLabel {
                 color: #606266;
-                font-size: 11px;
+                font-size: 9pt;
                 font-weight: normal;
             }
             QTableWidget {
                 border: 1px solid #e4e7ed;
                 background-color: #ffffff;
                 gridline-color: #f2f6fc;
-                font-size: 11px;
+                font-size: 9pt;
                 border-radius: 4px;
             }
             QTableWidget::item {
@@ -98,12 +98,13 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                 padding: 4px;
                 background: #ffffff;
                 color: #606266;
+                font-size: 9pt;
             }
             QDoubleSpinBox:focus, QSpinBox:focus {
                 border-color: #409eff;
             }
             QCheckBox {
-                font-size: 11px;
+                font-size: 9pt;
                 color: #606266;
             }
             QSplitter::handle {
@@ -185,11 +186,11 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
         daq_layout.addWidget(self.load_daq_meta_btn)
         
         self.daq_status_label = QtWidgets.QLabel("No DAQ Data Loaded")
-        self.daq_status_label.setStyleSheet("color: #909399; font-weight: bold; font-size: 11px; margin-top: 5px;")
+        self.daq_status_label.setStyleSheet("color: #909399; font-weight: bold; font-size: 9pt; margin-top: 5px;")
         daq_layout.addWidget(self.daq_status_label)
         
         self.daq_metrics_label = QtWidgets.QLabel("")
-        self.daq_metrics_label.setStyleSheet("color: #2c3e50; font-family: 'Consolas', monospace; font-size: 10px;")
+        self.daq_metrics_label.setStyleSheet("color: #2c3e50; font-family: 'Consolas', monospace; font-size: 8.5pt;")
         daq_layout.addWidget(self.daq_metrics_label)
         
         scroll_layout.addWidget(daq_group)
@@ -286,8 +287,15 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
         self.plot_widget = pg.PlotWidget()
         self.plot_widget.setBackground('w')  # Clean white background
         self.plot_widget.showGrid(x=True, y=True, alpha=0.15)
-        self.plot_widget.setLabel('left', 'Channels')
-        self.plot_widget.setLabel('bottom', 'Time', units='s')
+        
+        # Style tick fonts and label fonts for High DPI scaling
+        font = QtGui.QFont("Segoe UI", 10)
+        self.plot_widget.getAxis('left').setStyle(tickFont=font)
+        self.plot_widget.getAxis('bottom').setStyle(tickFont=font)
+        label_style = {'color': '#333', 'font-size': '11pt', 'font-family': 'Segoe UI', 'font-weight': 'bold'}
+        self.plot_widget.setLabel('left', 'Channels', **label_style)
+        self.plot_widget.setLabel('bottom', 'Time', units='s', **label_style)
+        
         self.plot_widget.getViewBox().setMouseEnabled(x=False, y=False) # Disable default dragging
         plot_layout.addWidget(self.plot_widget)
 
@@ -500,8 +508,82 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                 daq_ch_names = [ch.split('/')[-1] for ch in meta['channels']]
             
             daq_times = np.arange(daq_data.shape[1]) / daq_sfreq
-            daq_events = meta.get('events', [])
             task_name = meta.get('task_name', 'Unknown')
+
+            # 尝试自适应识别硬件 Trigger 通道 (Bit0 至 Bit7)
+            bit_chans = [None] * 8
+            for idx, ch_name in enumerate(daq_ch_names):
+                name_lower = ch_name.lower()
+                if "bit" in name_lower:
+                    for b in range(8):
+                        if f"bit{b}" in name_lower or f"bit_{b}" in name_lower:
+                            bit_chans[b] = idx
+                            break
+            
+            has_hardware_triggers = all(ch is not None for ch in bit_chans)
+            alignment_mode = "UDP Meta"
+            daq_events = []
+
+            if has_hardware_triggers:
+                # 从二进制数据解码 8 位硬件打标
+                print("[DAQ Load] 检测到硬件 Trigger 通道，正在提取高精度硬件打标事件...")
+                mapping = self.load_trigger_mapping()
+                
+                trigger_val = np.zeros(daq_data.shape[1], dtype=int)
+                for b in range(8):
+                    ch_idx = bit_chans[b]
+                    bit_array = (daq_data[ch_idx] > 1.5).astype(int)
+                    trigger_val += bit_array * (2 ** b)
+                
+                hardware_events = []
+                dead_time_samples = int(0.05 * daq_sfreq)  # 50ms 死区
+                
+                t = 0
+                n_samples = len(trigger_val)
+                while t < n_samples:
+                    if trigger_val[t] > 0:
+                        # 查找 10ms 窗口内的最大稳定值
+                        win_size = min(int(0.01 * daq_sfreq), n_samples - t)
+                        peek_window = trigger_val[t : t + win_size]
+                        peak_val = int(np.max(peek_window))
+                        
+                        # 从对照表匹配事件名称
+                        event_name = None
+                        for name, code in mapping.items():
+                            if code == peak_val:
+                                event_name = name
+                                break
+                        
+                        if event_name is None:
+                            event_name = f"TRIG_{peak_val}"
+                            
+                        hardware_events.append({
+                            'event': event_name,
+                            'daq_sample_index': t,
+                            'id': peak_val
+                        })
+                        
+                        # 跳过高电平宽度
+                        t += win_size
+                        while t < n_samples and trigger_val[t] > 0:
+                            t += 1
+                        t += dead_time_samples
+                    else:
+                        t += 1
+                
+                daq_events = hardware_events
+                alignment_mode = "Hardware Trigger"
+                print(f"[DAQ Load] 成功从硬件解码出 {len(daq_events)} 个打标事件")
+                
+                # 如果有硬件通道但没有提取到有效脉冲，回退到同名 meta 文件的 UDP 网络打标记录
+                if len(daq_events) == 0:
+                    print("[DAQ Load] 硬件 Trigger 通道没有记录到任何有效脉冲，回退到同名 meta 文件的 UDP 网络打标记录。")
+                    daq_events = meta.get('events', [])
+                    alignment_mode = "UDP Meta (Fallback)"
+            else:
+                print("[DAQ Load] 未检测到硬件 Trigger 通道，自动采用与 bin 数据文件同名的 meta 文件的 UDP 网络打标记录进行对齐。")
+                daq_events = meta.get('events', [])
+                alignment_mode = "UDP Meta"
 
             # Compute alignment relative to the BDF events
             daq_offset, mean_delay, jitter, max_d, min_d, num_matches = self.compute_alignment(
@@ -524,6 +606,7 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                 'max_d': max_d,
                 'min_d': min_d,
                 'num_matches': num_matches,
+                'alignment_mode': alignment_mode,
                 'curves': []
             }
 
@@ -545,6 +628,7 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                 self, "Sync Alignment Report",
                 f"🎉 BDF & DAQ Segment Alignment Successful!\n\n"
                 f"Segment Action         : {task_name}\n"
+                f"Alignment Mode         : {alignment_mode}\n"
                 f"Alignment Start Offset : {daq_offset:.3f} s\n"
                 f"Average Delay (EEG-DAQ): {mean_delay:.2f} ms\n"
                 f"Jitter (Std Dev)       : {jitter:.2f} ms\n"
@@ -553,35 +637,40 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                 f"{status_text}"
             )
 
-            self.statusBar().showMessage(f"Loaded DAQ Segment: {task_name}", 5000)
+            self.statusBar().showMessage(f"Loaded DAQ Segment: {task_name} ({alignment_mode})", 5000)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "DAQ Load Error", f"Failed to load DAQ data:\n{str(e)}")
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
 
-    def compute_alignment(self, daq_sfreq, daq_events, task_name):
-        """Finds segment offset, matched triggers, delays, and jitter standard deviation."""
-        # 1. Load trigger mappings from Simple_EOG_Paradigm
+    def load_trigger_mapping(self):
+        """Helper to load the trigger mapping dictionary dynamically."""
         mapping = {}
         mapping_paths = [
-            os.path.join(os.path.dirname(self.filepath), 'trigger_mappings.json'),
+            os.path.join(os.path.dirname(self.filepath), 'trigger_mappings.json') if self.filepath else '',
             os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trigger_mappings.json'),
             r'd:\OneDrive\Data\DoCs\Tools\Simple_EOG_Paradigm\trigger_mappings.json',
             'trigger_mappings.json'
         ]
         for path in mapping_paths:
-            if os.path.exists(path):
+            if path and os.path.exists(path):
                 try:
                     with open(path, 'r', encoding='utf-8') as f:
                         mappings_data = json.load(f)
                         mapping = mappings_data.get('眼动网格', {})
                         if mapping:
-                            break
+                            return mapping
                 except Exception:
                     pass
+        return mapping
 
-        # 2. Find task start trigger based on expected start codes
-        expected_start_code = None
+    def compute_alignment(self, daq_sfreq, daq_events, task_name):
+        """Finds segment offset, matched triggers, delays, and jitter standard deviation using sequential matching."""
+        # 1. Load trigger mappings dynamically
+        mapping = self.load_trigger_mapping()
+
+        # 2. Determine expected start code
+        expected_start_code = 150  # default grid start code
         if "X负半轴" in task_name:
             expected_start_code = 160
         elif "X正半轴" in task_name:
@@ -592,83 +681,89 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
             expected_start_code = 190
         elif "眨眼" in task_name:
             expected_start_code = 200
-        else:
-            expected_start_code = 150 # default grid start code
 
-        bdf_start_time = None
-        for ev in self.events:
+        # Find all candidate start events in BDF matching any task start codes
+        start_triggers = {150, 160, 170, 180, 190, 200}
+        candidates = []
+        for idx, ev in enumerate(self.events):
             try:
                 ev_id = int(ev['id'])
-                if ev_id == expected_start_code:
-                    bdf_start_time = ev['time']
-                    break
+                if ev_id == expected_start_code or ev_id in start_triggers:
+                    candidates.append((ev['time'], ev_id, idx))
             except ValueError:
                 pass
 
-        # Fallback to any generic task start triggers
-        start_triggers = {150, 160, 170, 180, 190, 200}
-        if bdf_start_time is None:
-            for ev in self.events:
-                try:
-                    ev_id = int(ev['id'])
-                    if ev_id in start_triggers:
-                        bdf_start_time = ev['time']
-                        break
-                except ValueError:
-                    pass
+        if not candidates:
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0
 
-        # 3. Match subsequent triggers
-        matched_pairs = []
-        for daq_ev in daq_events:
-            event_name = daq_ev['event']
-            expected_trigger = mapping.get(event_name)
-            if expected_trigger is not None:
-                daq_time = daq_ev['daq_sample_index'] / daq_sfreq
-                for bdf_ev in self.events:
-                    try:
-                        bdf_id = int(bdf_ev['id'])
-                        if bdf_id == expected_trigger:
-                            if bdf_start_time is not None and bdf_ev['time'] < bdf_start_time:
-                                continue
-                            matched_pairs.append((daq_time, bdf_ev['time'], event_name))
-                            break
-                    except ValueError:
-                        pass
+        # Evaluate each candidate to select the optimal one (highest match count, lowest jitter)
+        best_delays_stats = (0.0, 0.0, 0.0, 0.0, 0.0, 0)
+        best_matches = -1
+        best_jitter = float('inf')
 
-        # 4. Set final alignment offset
-        if bdf_start_time is not None:
+        for bdf_start_time, ev_id, start_idx in candidates:
             daq_offset = bdf_start_time
-        elif matched_pairs:
-            daq_offset = matched_pairs[0][1] - matched_pairs[0][0]
-        else:
-            daq_offset = 0.0
+            
+            # Match subsequent triggers sequentially to calculate true delay and jitter
+            matched_pairs = []
+            bdf_pointer = start_idx
+            n_bdf = len(self.events)
+            used_bdf_indices = set()
 
-        # 5. Compute delay differences
-        if matched_pairs:
-            delays = []
-            for daq_time, bdf_time, name in matched_pairs:
-                actual_delay = (bdf_time - (daq_time + daq_offset)) * 1000.0
-                delays.append(actual_delay)
+            for daq_ev in daq_events:
+                event_name = daq_ev['event']
+                expected_trigger = mapping.get(event_name)
+                if expected_trigger is not None:
+                    daq_time = daq_ev['daq_sample_index'] / daq_sfreq
+                    
+                    for bdf_idx in range(bdf_pointer, n_bdf):
+                        bdf_ev = self.events[bdf_idx]
+                        try:
+                            bdf_ev_id = int(bdf_ev['id'])
+                            if bdf_ev_id == expected_trigger:
+                                if bdf_ev['time'] < bdf_start_time:
+                                    continue
+                                if bdf_idx not in used_bdf_indices:
+                                    matched_pairs.append((daq_time, bdf_ev['time']))
+                                    used_bdf_indices.add(bdf_idx)
+                                    bdf_pointer = bdf_idx + 1
+                                    break
+                        except ValueError:
+                            pass
+
+            if matched_pairs:
+                delays = []
+                for daq_time, bdf_time in matched_pairs:
+                    actual_delay = (bdf_time - (daq_time + daq_offset)) * 1000.0
+                    delays.append(actual_delay)
                 
-            mean_delay = np.mean(delays)
-            jitter = np.std(delays)
-            max_d = np.max(delays)
-            min_d = np.min(delays)
-            num_matches = len(matched_pairs)
-        else:
-            mean_delay, jitter, max_d, min_d, num_matches = 0.0, 0.0, 0.0, 0.0, 0
+                mean_delay = np.mean(delays)
+                jitter = np.std(delays)
+                max_d = np.max(delays)
+                min_d = np.min(delays)
+                num_matches = len(matched_pairs)
 
-        return daq_offset, mean_delay, jitter, max_d, min_d, num_matches
+                score_matches = num_matches
+                if ev_id == expected_start_code:
+                    score_matches += 0.1  # Prefer correct start code on ties
+
+                # Best matches criteria
+                if score_matches > best_matches or (score_matches == best_matches and jitter < best_jitter):
+                    best_matches = score_matches
+                    best_jitter = jitter
+                    best_delays_stats = (daq_offset, mean_delay, jitter, max_d, min_d, num_matches)
+
+        return best_delays_stats
 
     def update_daq_sidebar_ui(self):
         if not self.daq_segments:
             self.daq_status_label.setText("No DAQ Data Loaded")
-            self.daq_status_label.setStyleSheet("color: #909399; font-weight: bold; font-size: 11px;")
+            self.daq_status_label.setStyleSheet("color: #909399; font-weight: bold; font-size: 9pt;")
             self.daq_metrics_label.setText("")
             return
             
         self.daq_status_label.setText(f"Loaded {len(self.daq_segments)} Segment(s)")
-        self.daq_status_label.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 11px;")
+        self.daq_status_label.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 9pt;")
         
         metrics = []
         for s in self.daq_segments:
@@ -763,11 +858,17 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
         # 2. Add curves for each loaded DAQ segment (Emerald Green)
         for seg in self.daq_segments:
             seg['curves'] = []
-            for _ in range(seg['data'].shape[0]):
-                pen = pg.mkPen(color=(39, 174, 96), width=1.5)
-                curve = self.plot_widget.plot(pen=pen)
-                seg['curves'].append(curve)
-                
+            # Only count non-trigger channels for curves
+            seg['plot_ch_indices'] = []
+            for i, ch_name in enumerate(seg['ch_names']):
+                name_lower = ch_name.lower()
+                # Exclude trigger card bit channels and status/trigger marker channels
+                if not any(t in name_lower for t in ["bit", "trig", "status"]):
+                    seg['plot_ch_indices'].append(i)
+                    pen = pg.mkPen(color=(39, 174, 96), width=1.5)
+                    curve = self.plot_widget.plot(pen=pen)
+                    seg['curves'].append(curve)
+                 
         self.update_y_axis_ticks()
 
     def update_y_axis_ticks(self):
@@ -777,14 +878,19 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
         spacing = self.spacing_spin.value() * 1e-6
         ay = self.plot_widget.getAxis('left')
         
+        # Increase tick font size for readability on high DPI
+        font = QtGui.QFont("Segoe UI", 9)
+        ay.setStyle(tickFont=font)
+        
         ticks = [(-i * spacing, name) for i, name in enumerate(self.ch_names)]
         
-        # Add DAQ ticks below BDF ticks using channel names from first segment
+        # Add DAQ ticks below BDF ticks using only plotted (non-trigger) channels
         if self.daq_segments:
-            daq_ch_names = self.daq_segments[0]['ch_names']
-            for i, name in enumerate(daq_ch_names):
+            seg = self.daq_segments[0]
+            plot_indices = seg.get('plot_ch_indices', [])
+            for i, idx in enumerate(plot_indices):
                 pos = -(self.n_channels + i) * spacing
-                ticks.append((pos, f"[DAQ] {name}"))
+                ticks.append((pos, f"[DAQ] {seg['ch_names'][idx]}"))
                 
         ay.setTicks([ticks])
 
@@ -856,7 +962,7 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
             offset_y = -i * spacing
             self.curves[i].setData(times_slice, data_slice[i] * zoom + offset_y)
             
-        # 2. Update DAQ curves for each loaded segment
+        # 2. Update DAQ curves for each loaded segment scaled properly to spacing
         start_time = start_sample / self.sfreq
         end_time = end_sample / self.sfreq
         
@@ -864,6 +970,7 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
             daq_sfreq = seg['sfreq']
             offset = seg['offset']
             daq_data = seg['data']
+            plot_indices = seg.get('plot_ch_indices', [])
             
             # Calculate corresponding samples in DAQ data
             daq_start = max(0, int((start_time - offset) * daq_sfreq))
@@ -873,15 +980,22 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                 daq_slice = daq_data[:, daq_start:daq_end]
                 daq_times = np.arange(daq_start, daq_end) / daq_sfreq + offset
                 
-                for i in range(daq_slice.shape[0]):
-                    offset_y = -(self.n_channels + i) * spacing
-                    seg['curves'][i].setData(daq_times, daq_slice[i] * zoom + offset_y)
+                for curve_idx, i in enumerate(plot_indices):
+                    offset_y = -(self.n_channels + curve_idx) * spacing
+                    y_val = daq_slice[i].copy()
+                    
+                    # Center analog signals (EOG, EMG, etc.) around their channel row baseline.
+                    y_val = y_val - np.mean(y_val)
+                    
+                    # DAQ values are in Volts (e.g. 0.1V). Scale EOG/EMG to fit comfortably in spacing.
+                    scale_factor = 5.0 * spacing
+                    seg['curves'][curve_idx].setData(daq_times, y_val * scale_factor * zoom + offset_y)
             else:
-                for i in range(len(seg['curves'])):
-                    seg['curves'][i].setData([], [])
+                for curve in seg['curves']:
+                    curve.setData([], [])
             
-        # Adjust Y-axis range to accommodate the max number of channels
-        max_daq_chans = max([s['data'].shape[0] for s in self.daq_segments]) if self.daq_segments else 0
+        # Adjust Y-axis range to accommodate the max number of plotted channels
+        max_daq_chans = max([len(s.get('plot_ch_indices', [])) for s in self.daq_segments]) if self.daq_segments else 0
         total_ch = self.n_channels + max_daq_chans
         
         self.plot_widget.setXRange(start_time, end_time, padding=0)
@@ -902,6 +1016,7 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                     label=f"Evt {ev['id']}", 
                     labelOpts={'color': (180, 0, 0), 'position': 0.95}
                 )
+                line.label.setFont(QtGui.QFont("Segoe UI", 9))
                 self.plot_widget.addItem(line)
                 self.event_lines.append(line)
 
@@ -924,6 +1039,10 @@ class HardwareSyncViewer(QtWidgets.QMainWindow):
                 pass
 
 def main():
+    # Enable High DPI scaling attributes prior to creating QApplication
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+    
     app = QtWidgets.QApplication(sys.argv)
     viewer = HardwareSyncViewer()
     viewer.show()
