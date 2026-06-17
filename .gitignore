@@ -50,3 +50,17 @@ venv.bak/
 .vscode/
 *.swp
 *.swo
+
+# Models and classification assets
+models/
+*.pkl
+*.mat
+
+# Generated plots and visualization output
+plots/
+validation_plots/
+*.png
+*.jpg
+*.jpeg
+*.pdf
+
