@@ -17,7 +17,14 @@ class TriggerDevice:
 
     def __init__(self, port: str = "COM3", api_dir: str | None = None, enabled: bool = True):
         self.port = port
-        self.api_dir = Path(api_dir) if api_dir else None
+        if api_dir:
+            p = Path(api_dir)
+            if not p.is_absolute():
+                self.api_dir = (Path(__file__).parent / p).resolve()
+            else:
+                self.api_dir = p.resolve()
+        else:
+            self.api_dir = None
         self.enabled = enabled
         self._trigger = None
         self.connected = False
@@ -90,21 +97,33 @@ class TriggerDevice:
         candidates.extend(DEFAULT_API_DIRS)
 
         for path in candidates:
-            if (path / "neuracle_lib" / "triggerBox.py").exists():
-                path_text = str(path)
-                if path_text not in sys.path:
-                    sys.path.insert(0, path_text)
-                try:
-                    from neuracle_lib.triggerBox import TriggerIn
-                except ModuleNotFoundError as exc:
-                    if exc.name == "serial":
-                        raise ImportError(
-                            "pyserial is required by the vendor API. Install it with: python -m pip install pyserial"
-                        ) from exc
-                    raise
+            # 兼容性检查：
+            # 1. 如果路径指向 neuracle_lib 目录本身（如 .../neuracle_lib）
+            if path.name == "neuracle_lib" and (path / "triggerBox.py").exists():
+                import_dir = path.parent
+            # 2. 如果路径指向包含 neuracle_lib 的父目录（如项目根目录）
+            elif (path / "neuracle_lib" / "triggerBox.py").exists():
+                import_dir = path
+            # 3. 如果路径直接包含 triggerBox.py 且不是 neuracle_lib 名字（如自定义的 neuracle 库路径）
+            elif (path / "triggerBox.py").exists():
+                import_dir = path.parent
+            else:
+                continue
 
+            path_text = str(import_dir)
+            if path_text not in sys.path:
+                sys.path.insert(0, path_text)
+            try:
+                from neuracle_lib.triggerBox import TriggerIn
                 return TriggerIn
+            except ModuleNotFoundError as exc:
+                if exc.name == "serial":
+                    raise ImportError(
+                        "pyserial is required by the vendor API. Install it with: python -m pip install pyserial"
+                    ) from exc
+                raise
 
         raise ImportError(
-            "Cannot find neuracle_lib.triggerBox. Set --api-dir to the folder containing neuracle_lib."
+            f"在搜索路径 { [str(p) for p in candidates] } 中未找到 neuracle_lib.triggerBox。\n"
+            "如果使用的是脑电同步器模式，请通过 GUI 或在 config.json 中配置正确的 Neuracle API 目录。"
         )

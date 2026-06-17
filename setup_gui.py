@@ -7,7 +7,7 @@ import os
 import sys
 import json
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, filedialog
 from pathlib import Path
 
 import acquisition_device
@@ -126,8 +126,23 @@ class EOGSetupDialog:
         self.port_entry.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=6)
         
         tk.Label(self.device_frame, text="Neuracle API目录", bg=THEME["panel"], fg=THEME["text"], font=("Microsoft YaHei", 9)).grid(row=2, column=0, sticky="e", pady=6)
-        self.api_entry = tk.Entry(self.device_frame, font=("Microsoft YaHei", 10), bd=1, relief="solid", width=20)
-        self.api_entry.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=6)
+        api_subframe = tk.Frame(self.device_frame, bg=THEME["panel"])
+        api_subframe.grid(row=2, column=1, sticky="w", padx=(10, 0), pady=6)
+        self.api_entry = tk.Entry(api_subframe, font=("Microsoft YaHei", 10), bd=1, relief="solid", width=14)
+        self.api_entry.pack(side="left")
+        self.api_browse_btn = tk.Button(
+            api_subframe,
+            text="...",
+            font=("Microsoft YaHei", 9, "bold"),
+            bg=THEME["bg"],
+            fg=THEME["text"],
+            bd=1,
+            relief="solid",
+            command=self._browse_api_dir,
+            width=3,
+            padx=2
+        )
+        self.api_browse_btn.pack(side="left", padx=(5, 0))
         
         tk.Label(self.device_frame, text="Shanghai IP & Port", bg=THEME["panel"], fg=THEME["text"], font=("Microsoft YaHei", 9)).grid(row=3, column=0, sticky="e", pady=6)
         ip_port_subframe = tk.Frame(self.device_frame, bg=THEME["panel"])
@@ -245,7 +260,10 @@ class EOGSetupDialog:
             
         self.mode_combo.set(hardware_mode)
         self.port_entry.insert(0, self.config.get("serial_port", "COM3"))
-        self.api_entry.insert(0, self.config.get("api_dir", ""))
+        api_dir = self.config.get("api_dir", "")
+        if not api_dir:
+            api_dir = "neuracle_lib"
+        self.api_entry.insert(0, api_dir)
         self.ip_entry.insert(0, self.config.get("network", {}).get("daq_pc_ip", "10.10.10.100"))
         self.udp_port_entry.insert(0, str(self.config.get("network", {}).get("udp_port", 55555)))
         
@@ -256,23 +274,46 @@ class EOGSetupDialog:
         if mode == "dry_run":
             self.port_entry.configure(state="disabled")
             self.api_entry.configure(state="disabled")
+            self.api_browse_btn.configure(state="disabled")
             self.ip_entry.configure(state="disabled")
             self.udp_port_entry.configure(state="disabled")
         elif mode == "neuracle":
             self.port_entry.configure(state="normal")
             self.api_entry.configure(state="normal")
+            self.api_browse_btn.configure(state="normal")
             self.ip_entry.configure(state="disabled")
             self.udp_port_entry.configure(state="disabled")
         elif mode == "jellyfish":
             self.port_entry.configure(state="normal")
             self.api_entry.configure(state="disabled")
+            self.api_browse_btn.configure(state="disabled")
             self.ip_entry.configure(state="disabled")
             self.udp_port_entry.configure(state="disabled")
         elif mode == "shanghai":
             self.port_entry.configure(state="disabled")
             self.api_entry.configure(state="disabled")
+            self.api_browse_btn.configure(state="disabled")
             self.ip_entry.configure(state="normal")
             self.udp_port_entry.configure(state="normal")
+
+    def _browse_api_dir(self):
+        initial_dir = os.path.dirname(os.path.abspath(__file__))
+        selected_dir = filedialog.askdirectory(
+            parent=self.root,
+            title="请选择 neuracle_lib 文件夹",
+            initialdir=initial_dir
+        )
+        if selected_dir:
+            try:
+                rel_path = os.path.relpath(selected_dir, initial_dir)
+                if not rel_path.startswith("..") and not os.path.isabs(rel_path):
+                    path_to_use = rel_path
+                else:
+                    path_to_use = os.path.normpath(selected_dir)
+            except Exception:
+                path_to_use = os.path.normpath(selected_dir)
+            self.api_entry.delete(0, tk.END)
+            self.api_entry.insert(0, path_to_use)
 
     def _test_connection(self):
         # 暂存配置用于连接测试
@@ -378,3 +419,29 @@ def show_setup_gui(config: dict, title_text: str = "眼电采集系统 - 实验�
     app = EOGSetupDialog(root, config, title_text)
     root.mainloop()
     return app.result
+
+
+if __name__ == "__main__":
+    # 读取同目录下的 config.json 运行测试
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {
+            "device_mode": "dry_run",
+            "serial_port": "COM3",
+            "api_dir": "",
+            "patient_id": "test_id",
+            "patient_name": "test_name",
+            "operator": "",
+            "session_note": "",
+            "network": {
+                "daq_pc_ip": "127.0.0.1",
+                "udp_port": 55555
+            }
+        }
+    print("正在启动配置引导 GUI 测试模式...")
+    res = show_setup_gui(cfg)
+    print("保存的配置结果:", res)
+
