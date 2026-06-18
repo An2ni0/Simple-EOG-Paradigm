@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 DEFAULT_API_DIRS = [
-    Path(r"C:\Users\衢州学院\xwechat_files\wxid_98n2p94v68yh22_252d\msg\file\2026-06\API.py源码"),
-    Path(r"D:\api\API.py源码"),
+    Path(__file__).parent / "neuracle_lib",
+    Path(__file__).parent,
 ]
 
 
