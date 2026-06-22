@@ -163,20 +163,35 @@ Matches the behavioral CSV log generated locally after the experiment ends with 
 
 ## VII. Subsequent Modeling and Data Analysis Alignment Guide (For Analysts)
 
-This system uses a minimalist UDP alignment scheme without needing to parse voltage levels:
+To achieve sample-accurate marker alignment, the system supports both high-precision hardware parallel trigger decoding and network-based UDP logging.
 
-1. **Read Metadata**:
-    Open the `_meta.json` in the `EOG/` folder to read the marker points broadcasted by the paradigm PC in the `events` list. For example:
-    ```json
-    {
-        "event": "T_1_R0C1_TARGET_START",
-        "system_time": 17839304.51,
-        "daq_sample_index": 25000
-    }
-    ```
-    This indicates that when the cDAQ acquired the `25000`th data point, the red dot at the grid `(Row 0, Col 1)` position lit up.
+### 1. High-Precision Offline Decoder (Recommended)
+You can run the offline decoder script `cDAQ_Offline_Decode.py` to parse the 8 parallel trigger channels (`ai16` to `ai23`) in the binary data and align them with the UDP events.
+* **Usage**:
+  ```bash
+  python cDAQ_Offline_Decode.py [path_to_data.bin]
+  ```
+  If no path is specified, it will automatically search for the latest `.bin` file in the adjacent `Data260622` or `EOG` directories.
+* **Outputs**:
+  - `{basename}_meta_refined.json`: A new meta file containing refined `daq_sample_index` values mapped to precise hardware trigger rising edges.
+  - `{basename}_decoded.csv`: A CSV report listing all decoded physical markers, event names, and calculated network delay/jitter metrics.
+* **Robustness**: The decoder automatically aligns events by time proximity and trigger value verification, gracefully handling potential hardware bit stuck/wiring errors.
 
-2. **Baseline Correction**:
+### 2. Read Refined Metadata
+Open the refined `{basename}_meta_refined.json` file. The `events` list contains the aligned events. For example:
+```json
+{
+    "event": "T_1_R2C1_TARGET_BEFORE",
+    "system_time": 1782114820.6154797,
+    "daq_sample_index": 67334,
+    "udp_sample_index": 67000,
+    "offset_samples": -334,
+    "offset_ms": -33.4
+}
+```
+This indicates that the physical trigger for the event was detected precisely at sample `67334` (correcting for the 33.4 ms UDP transmission latency).
+
+### 3. Baseline Correction:
     Because EOG is prone to baseline drift over time, when extracting the voltage of looking at the red dot:
     * Extract the average voltage of hEOG and vEOG during `REST_START` to `REST_END` (staring at the center cross) as the baseline $V_{base\_h}, V_{base\_v}$;
     * Extract the voltage $V_h, V_v$ during `TARGET_START` to `TARGET_END` (staring at the target red dot);
@@ -349,20 +364,35 @@ This system uses a minimalist UDP alignment scheme without needing to parse volt
 
 ## 七、 后续建模与数据分析对齐指南 (给分析人员)
 
-本系统使用 UDP 极简对齐方案，无需解析电平：
+为了实现样本点级别的高精度数据对准，系统支持硬件并行电平触发解码和网络 UDP 同步两种机制。
 
-1.  **读取元数据**：
-    打开 `EOG/` 文件夹下的 `_meta.json`，在 `events` 列表中可以读到范式 PC 广播的打标点。例如：
-    ```json
-    {
-        "event": "T_1_R0C1_TARGET_START",
-        "system_time": 17839304.51,
-        "daq_sample_index": 25000
-    }
-    ```
-    代表在 cDAQ 采集到第 `25000` 个数据点时，网格 `(Row 0, Col 1)` 位置的红点亮起。
+### 1. 高精度离线解码对齐工具 (推荐首选)
+运行项目根目录下的 `cDAQ_Offline_Decode.py` 脚本，可自动读取 `.bin` 原始波形中 `ai16` 至 `ai23` 这 8 个数字同步通道的电压状态，完成高精度硬件级打标解码与对准。
+* **执行命令**：
+  ```bash
+  python cDAQ_Offline_Decode.py [数据路径/DAQ_Data_xxx.bin]
+  ```
+  若不传入具体路径，程序将自动扫描并解析 `Data260622` 或 `EOG` 文件夹下最新生成的数据。
+* **产出文件**：
+  - `{basename}_meta_refined.json`：包含已校正为**高精度物理上升沿样本索引**的 `daq_sample_index` 精细化元数据文件。
+  - `{basename}_decoded.csv`：包含对齐后的事件名称、高精度样本点、UDP 网络传输延时与抖动统计的 CSV 详表。
+* **鲁棒性**：对准器采用时间邻域加数值校验的混合策略，可自动纠正硬件接线顺序错误或个别数据位电平缺失导致的数值偏移，实现 100% 对齐。
 
-2.  **基线漂移扣除 (Baseline Correction)**：
+### 2. 读取精细化元数据：
+解析新生成的 `{basename}_meta_refined.json` 文件。其中的 `events` 包含已校准的时间戳和采样索引。例如：
+```json
+{
+    "event": "T_1_R2C1_TARGET_BEFORE",
+    "system_time": 1782114820.6154797,
+    "daq_sample_index": 67334,
+    "udp_sample_index": 67000,
+    "offset_samples": -334,
+    "offset_ms": -33.4
+}
+```
+这表明该事件的物理并行电平触发发生在第 `67334` 个采样点上（消除了网络 UDP 引入的 33.4 毫秒通信延迟）。
+
+### 3. 基线漂移扣除 (Baseline Correction)：
     由于眼电容易随时间产生基线漂移，在提取看红点段的电压时：
     *   提取 `REST_START` 至 `REST_END` 期间（注视中心十字）的 hEOG 和 vEOG 均值电压，作为基线 $V_{base\_h}, V_{base\_v}$；
     *   提取 `TARGET_START` 至 `TARGET_END` 期间（注视目标红点）的电压 $V_h, V_v$；
